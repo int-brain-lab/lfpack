@@ -545,6 +545,175 @@ def compress_to_h5(
     return out_h5
 
 
+def compress_bin_to_h5(
+    bin_file,
+    out_h5,
+    q=10,
+    h=None,
+    cadzow_rank=5,
+    cadzow_niter=1,
+    cadzow_fmax=None,
+    cadzow_nswx=64,
+    cadzow_gap_threshold=2.0,
+    cadzow_ppca_k=2.0,
+    epsilon=150.0,
+    alpha=28.0,
+    n_jobs=4,
+    chunk=_COMPRESS_CHUNK,
+    overlap=_COMPRESS_OVERLAP,
+):
+    """
+    Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
+
+    No intermediate files are written.  All three stages run in a single streaming pass
+    over the data, one compress chunk at a time.
+
+    Parameters
+    ----------
+    bin_file : path-like
+        SpikeGLX LFP binary (.cbin or .bin).  The .meta file must be in the same directory.
+    out_h5 : path-like
+        Output HDF5 file (created or overwritten).
+    q : int
+        Decimation factor.  Default 10 (2500 → 250 Hz).
+    h : dict or None
+        Probe header with keys 'x' and 'y'.  Defaults to NP1 geometry for nc channels.
+    cadzow_rank : int
+        Cadzow SVD rank.  Default 5.
+    cadzow_niter : int
+        Cadzow iterations.  Default 1.
+    cadzow_fmax : float or None
+        Max frequency for Cadzow [Hz].  Default None (Nyquist).
+    cadzow_nswx : int
+        Cadzow channel-window width.  Default 64.
+    cadzow_gap_threshold : float
+        Adaptive-rank gap threshold.  Default 2.0.
+    cadzow_ppca_k : float
+        PPCA outlier-suppression threshold.  Default 2.0.
+    epsilon : float
+        SVD threshold multiplier.  Default 150.
+    alpha : float
+        WP threshold multiplier.  Default 28.
+    n_jobs : int
+        Parallel workers for Cadzow per chunk.  Default 4.
+    chunk : int
+        Compress chunk size in decimated samples.  Default 2048.
+    overlap : int
+        SVD guard-band samples each side.  Default 128.
+
+    Returns
+    -------
+    Path
+        Path to the output HDF5 file.
+    """
+    import h5py
+    from scipy.signal import cheby1, sosfilt
+
+    bin_file = Path(bin_file)
+    out_h5 = Path(out_h5)
+
+    sr = _spikeglx.Reader(bin_file)
+    fs_raw = sr.fs
+    fs_lf = fs_raw / q
+    nc = sr.nc - sr.nsync
+    ns_raw = sr.ns
+    ns_lf = ns_raw // q
+
+    if h is None:
+        _h = neuropixel.trace_header(version=1)
+        h = {k: v[:nc] for k, v in _h.items()}
+
+    # Chebyshev type-I IIR anti-aliasing (same spec as scipy.signal.decimate default)
+    sos = cheby1(8, 0.05, 0.8 / q, output='sos')
+    # 0.2 s IIR guard on each side to let the filter settle before trimming
+    iir_guard = int(np.round(0.2 * fs_raw))
+
+    n_chunks = int(np.ceil(ns_lf / chunk))
+    report_every = max(1, n_chunks // 20)
+    total_cr = 0.0
+
+    with h5py.File(out_h5, 'w') as f:
+        mg = f.create_group('meta')
+        mg.attrs['nc'] = nc
+        mg.attrs['ns_total'] = ns_lf
+        mg.attrs['fs'] = fs_lf
+        mg.attrs['compress_chunk'] = chunk
+        mg.attrs['compress_overlap'] = overlap
+        mg.attrs['epsilon'] = epsilon
+        mg.attrs['alpha'] = alpha
+        mg.attrs['sglx_meta'] = _json.dumps(sr.meta or {})
+        mg.attrs['geometry_x'] = h['x'].astype(np.float32)
+        mg.attrs['geometry_y'] = h['y'].astype(np.float32)
+
+        cg = f.create_group('chunks')
+        for ci in range(n_chunks):
+            # Decimated written range
+            i0_lf = ci * chunk
+            i1_lf = min(i0_lf + chunk, ns_lf)
+            n_w = i1_lf - i0_lf
+
+            # Extend with SVD overlap
+            i0_lf_ext = max(0, i0_lf - overlap)
+            i1_lf_ext = min(ns_lf, i1_lf + overlap)
+            left_ov = i0_lf - i0_lf_ext
+            n_ext = i1_lf_ext - i0_lf_ext
+
+            # Corresponding raw range + IIR guard
+            i0_raw = max(0, i0_lf_ext * q - iir_guard)
+            i1_raw = min(ns_raw, i1_lf_ext * q + iir_guard)
+            left_guard = i0_lf_ext * q - i0_raw  # actual left guard in raw samples
+
+            # Read (n_raw, nc+sync) → (nc, n_raw) float32 in volts
+            raw = sr.read(nsel=slice(i0_raw, i1_raw))[0][:, :nc].T.astype(np.float32)
+
+            # Filter all channels at once, then downsample
+            filtered = sosfilt(sos, raw, axis=1)           # (nc, n_raw)
+            left_trim = left_guard // q
+            decimated = filtered[:, ::q][:, left_trim:left_trim + n_ext].astype(np.float32)
+
+            # Cadzow spatial denoising
+            denoised = _cadzow.cadzow_denoiser(
+                decimated, h=h, fs=fs_lf,
+                rank=cadzow_rank, niter=cadzow_niter, fmax=cadzow_fmax,
+                nswx=cadzow_nswx, gap_threshold=cadzow_gap_threshold,
+                ppca_k=cadzow_ppca_k, n_jobs=n_jobs,
+            )
+
+            # SVD + WP compress
+            c = compress(denoised, epsilon=epsilon, alpha=alpha)
+            reconstructed = decompress(c)
+            rmse = float(np.sqrt(np.mean(
+                (denoised[:, left_ov:left_ov + n_w].astype(np.float64)
+                 - reconstructed[:, left_ov:left_ov + n_w].astype(np.float64)) ** 2
+            )))
+
+            flat = c.Vh_hat.ravel()
+            vh_idx = np.flatnonzero(flat).astype(np.int32)
+            vh_vals = flat[vh_idx]
+
+            grp = cg.create_group(str(ci))
+            grp.create_dataset('U_scaled',   data=c.U_scaled, compression='gzip', shuffle=True)
+            grp.create_dataset('vh_indices', data=vh_idx,     compression='gzip', shuffle=True)
+            grp.create_dataset('vh_values',  data=vh_vals,    compression='gzip', shuffle=True)
+            grp.attrs['vh_shape']     = c.Vh_hat.shape
+            grp.attrs['ns_original']  = n_w
+            grp.attrs['ns_extended']  = n_ext
+            grp.attrs['left_overlap'] = left_ov
+            grp.attrs['epsilon']      = epsilon
+            grp.attrs['alpha']        = alpha
+            grp.attrs['cr_svd']       = c.cr_svd
+            grp.attrs['cr_wp']        = c.cr_wp
+            grp.attrs['cr_total']     = c.cr_total
+            grp.attrs['rmse']         = rmse
+            total_cr += c.cr_total
+
+            if ci % report_every == 0:
+                print(f'  Chunk {ci + 1}/{n_chunks}  CR={c.cr_total:.0f}  RMSE={rmse * 1e6:.2f} µV')
+
+    print(f'Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}')
+    return out_h5
+
+
 class LFPackReader(_spikeglx.Reader):
     """
     Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files.

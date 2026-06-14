@@ -7,6 +7,7 @@ from lfpack._core import (  # noqa: F401
     LFPCompressed,
     LFPackReader,
     compress,
+    compress_bin_to_h5,
     compress_pipeline,
     compress_to_h5,
     decompress,

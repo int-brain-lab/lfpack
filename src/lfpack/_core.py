@@ -545,7 +545,7 @@ def compress_to_h5(
     return out_h5
 
 
-class LFPCompressedReader(_spikeglx.Reader):
+class LFPackReader(_spikeglx.Reader):
     """
     Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files.
 
@@ -560,7 +560,7 @@ class LFPCompressedReader(_spikeglx.Reader):
 
     Examples
     --------
-    >>> sr = LFPCompressedReader('lf_compressed.h5')
+    >>> sr = LFPackReader('lf_compressed.h5')
     >>> data, _ = sr.read_samples(0, 2500)    # (2500, nc) float32, volts
     >>> snippet = sr[0:2500]                  # same, sync omitted
     """

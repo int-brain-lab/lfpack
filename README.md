@@ -31,15 +31,15 @@ uv sync --extra dev
 ## Getting started
 
 ```python
-from lfpack import compress_to_h5, LFPCompressedReader
+from lfpack import compress_to_h5, LFPackReader
 
 # Encode a Cadzow-denoised LFP array (.npy, shape (ns, nc)) to HDF5
 compress_to_h5('lf_cadzow.npy', 'lf.h5')
 
 # Decode on demand — same interface as spikeglx.Reader
-reader = LFPCompressedReader('lf.h5')
-traces = reader[0:1000]      # (1000, n_channels) float32, volts
-geometry = reader.geometry   # {'x': ..., 'y': ...} channel positions
+sr = LFPackReader('lf.h5')
+traces = sr[0:1000]      # (1000, n_channels) float32, volts
+geometry = sr.geometry   # {'x': ..., 'y': ...} channel positions
 ```
 
 Low-level chunk API:

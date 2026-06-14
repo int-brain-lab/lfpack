@@ -5,7 +5,7 @@ Lossy encode/decode pipeline: decimation → Cadzow denoising → adaptive SVD
 """
 from lfpack._core import (  # noqa: F401
     LFPCompressed,
-    LFPCompressedReader,
+    LFPackReader,
     compress,
     compress_pipeline,
     compress_to_h5,

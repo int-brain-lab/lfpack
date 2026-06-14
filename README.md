@@ -31,27 +31,15 @@ uv sync --extra dev
 ## Getting started
 
 ```python
-from lfpack import compress_to_h5, LFPackReader
+from lfpack import compress_bin_to_h5, LFPackReader
 
-# Encode a Cadzow-denoised LFP array (.npy, shape (ns, nc)) to HDF5
-compress_to_h5('lf_cadzow.npy', 'lf.h5')
+# Decimate, denoise, and compress a raw LFP binary in one call
+compress_bin_to_h5('path/to/lf.cbin', 'lf.h5')
 
 # Decode on demand — same interface as spikeglx.Reader
 sr = LFPackReader('lf.h5')
 traces = sr[0:1000]      # (1000, n_channels) float32, volts
 geometry = sr.geometry   # {'x': ..., 'y': ...} channel positions
-```
-
-Low-level chunk API:
-
-```python
-from lfpack import compress, decompress
-import numpy as np
-
-snippet = np.random.randn(384, 2048).astype(np.float32)  # (nc, ns)
-compressed = compress(snippet)
-reconstructed = decompress(compressed)  # (nc, ns) float32
-print(f'CR={compressed.cr_total:.0f}  RMSE={compressed.cr_svd:.1f}')
 ```
 
 ---

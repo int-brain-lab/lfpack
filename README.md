@@ -1,5 +1,9 @@
 # lfpack — LFP codec for Neuropixels recordings
 
+<p align="center">
+  <img src="docs/figures/logo.png" alt="lfpack logo" width="300"/>
+</p>
+
 Lossy codec for local-field-potential (LFP) recordings from Neuropixels probes.
 Four-stage pipeline: decimation → Cadzow denoising → adaptive SVD → wavelet-packet
 thresholding. Achieves **>100× compression** with median RMSE < 25 µV.
@@ -137,19 +141,40 @@ dense float32 data.
 
 ---
 
-## Results — flagship PID `eebcaf65` (76 min, 384 ch)
+## Results — flagship PID `eebcaf65` (76.5 min, 384 ch, NP1)
 
-| File | Size |
-|---|---|
-| `lf_resampled_car.npy` (raw decimated, float16) | 881 MB |
-| `lf_resampled_car_cadzow.npy` (float32) | 1762 MB |
-| `lf_compressed.h5` (this work) | **21.8 MB** |
+### Parameter sets
 
-True compression ratio: **114×** (original float32 / stored floats).
-On-disk ratio vs raw decimated float32: **81×** (1762 MB → 21.8 MB).
-RMSE per chunk: 15–24 µV (on Cadzow-denoised signal in volts).
+Original data: 2500 Hz, Recording length: 4588.45 s (76.47 min), 11,471,120 samples.
+Compression ratios are relative to the original int16 binary (nc × ns × 2 bytes = 8.2 GB).
 
-### Storage breakdown
+| Parameter set | ε (SVD) | α (WP) | File size | CR vs int16 binary | RMSE median | RMSE p95 |
+|---|---|---|---|--------------------|---|---|
+| **default** | 150 | 28 | 22 MB | **380×**           | 19 µV | 23 µV |
+| **aggressive** | 450 | 96 | 11 MB | **760×**           | 34 µV | 40 µV |
+
+### Density display — original, Cadzow, compressed, residuals
+
+![Density display](docs/figures/density.png)
+
+*2×5 panel: rows = default / aggressive; columns = original resampled → Cadzow →
+Cadzow−original → compressed → compressed−Cadzow.  Single shared colormap ±190 µV.*
+
+### Average PSD (600 s, nperseg=64)
+
+![PSD comparison](docs/figures/psd.png)
+
+*600 s of data, nperseg=256 (~1 Hz resolution, ~1200 Welch segments).
+Solid lines: signal spectra.  Dashed: residuals after each processing step.
+Default compression (orange) follows Cadzow closely to 125 Hz.
+Aggressive (red) rolls off above ~80 Hz, sacrificing high-frequency content
+for 2× smaller files.*
+
+### RMSE distribution and CR vs RMSE scatter
+
+![RMSE / CR scatter](docs/figures/rmse_cr.png)
+
+### Storage breakdown (default parameters)
 
 | Dataset | Stored | Gzip ratio |
 |---|---|---|
@@ -157,4 +182,4 @@ RMSE per chunk: 15–24 µV (on Cadzow-denoised signal in volts).
 | Vh_hat sparse (indices + values, gzip) | ~5.4 MB | — |
 | Info-theoretic minimum (U + n_kept floats) | ~17.8 MB | — |
 
-U_scaled dominates (50% of file) because it is dense float data that compresses poorly.
+U_scaled dominates (~50% of file) because dense float32 compresses poorly.

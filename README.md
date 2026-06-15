@@ -5,8 +5,8 @@
 </p>
 
 Lossy codec for local-field-potential (LFP) recordings from Neuropixels probes.
-Four-stage pipeline: decimation → Cadzow denoising → adaptive SVD → wavelet-packet
-thresholding. Achieves **>100× compression** with median RMSE < 25 µV.
+Seven-stage pipeline: bad-channel detection → highpass → decimation → dephasing → CAR → Cadzow denoising → adaptive SVD + wavelet-packet thresholding.
+Achieves **>100× compression** with median RMSE < 25 µV.
 
 ---
 
@@ -48,30 +48,94 @@ geometry = sr.geometry   # {'x': ..., 'y': ...} channel positions
 
 ---
 
+## Example — PID `dab512bd` (NP1, 61 min, 384 ch)
+
+### Parameter sets
+
+| Parameter set | ε (SVD) | α (WP) | File size | CR (median) | RMSE median | RMSE p95 |
+|---|---|---|---|---|---|---|
+| **default** | 150 | 28 | 19 MB | **97×** | 24 µV | 27 µV |
+| **aggressive** | 450 | 96 | 9 MB | **305×** | 49 µV | 54 µV |
+
+### LFP voltage density — original · Cadzow · default · aggressive
+
+![LFP density](docs/figures/density_lfp_dab512bd.png)
+
+*Top row: original resampled → Cadzow denoised → default compressed → aggressive compressed.
+Bottom row: residuals (compressed − Cadzow) for default and aggressive.  Colormap ±300 µV.*
+
+### Current-source density — original · Cadzow · default · aggressive
+
+![CSD density](docs/figures/density_csd_dab512bd.png)
+
+*Same layout as above but displayed as CSD (second spatial derivative).
+Colormap in A/m³.*
+
+### RMSE distribution and CR vs RMSE scatter
+
+![RMSE / CR scatter](docs/figures/rmse_cr_dab512bd.png)
+
+---
+
 # LFP compression — methods and notes
 
 ## Pipeline overview
 
-Four sequential stages applied to raw NP1/NP2 LFP data (384 ch, 2500 Hz):
+Seven sequential stages applied to raw NP1/NP2 LFP data (384 ch, 2500 Hz):
 
 ```
 raw LFP (2500 Hz)
-  └─ 1. Decimation        → 250 Hz
-  └─ 2. Cadzow denoising  → spatially denoised LFP
-  └─ 3. SVD compression   → rank-r approximation
-  └─ 4. WP thresholding   → sparse coefficient storage
+  └─ 1. Bad-channel detection  → per-channel labels (dead / noisy / outside brain)
+  └─ 2. Highpass filter        → 2 Hz zero-phase 3rd-order Butterworth
+  └─ 3. Decimation             → 250 Hz (FIR anti-aliasing, bad channels interpolated)
+  └─ 4. Dephasing              → sample-shift correction (NP1 only)
+  └─ 5. CAR                    → median common-average reference subtracted
+  └─ 6. Cadzow denoising       → spatially denoised LFP
+  └─ 7. SVD + WP               → rank-r approximation → sparse coefficient storage
 ```
 
 ---
 
-## Stage 1 — Decimation (2500 → 250 Hz)
+## Stage 1 — Bad-channel detection
 
-IIR anti-aliasing (`scipy.signal.decimate`, Q=10) applied in overlapping 30 s chunks
-(0.2 s IIR guard halo each side) to avoid edge transients.
+Automatic per-channel quality labels (0 = good, 1 = dead, 2 = noisy, 3 = outside brain)
+are assigned via `ibldsp.voltage.detect_bad_channels_cbin` before decimation.
+Bad channels are interpolated from neighbours before the SVD step, preventing incoherent
+channels from inflating the noise-floor estimate and forcing a higher rank.
 
 ---
 
-## Stage 2 — Cadzow denoising
+## Stage 2 — Highpass filter
+
+3rd-order zero-phase Butterworth highpass at 2 Hz (`scipy.signal.sosfiltfilt`) removes
+slow DC drifts before decimation.
+
+---
+
+## Stage 3 — Decimation (2500 → 250 Hz)
+
+FIR anti-aliasing (`scipy.signal.decimate`, Q=10) applied in overlapping chunks
+(512-sample filter warmup halo each side) to avoid edge transients.
+
+---
+
+## Stage 4 — Dephasing
+
+Sample-shift correction for NP1 probes: each channel is phase-rotated in the frequency
+domain by `exp(1j × angle × sample_shift)` to align all channels to a common time
+reference before CAR.
+
+---
+
+## Stage 5 — CAR (common-average reference)
+
+Median across all good channels is subtracted sample-by-sample.  The removed trace is
+saved alongside the compressed file as `<stem>_car.npy` for later inspection or
+re-addition.
+
+---
+
+## Stage 6 — Cadzow denoising
 
 Spatial denoising via the Cadzow algorithm (`ibldsp.cadzow.cadzow_denoiser`) run in
 640-sample chunks with 64-sample halos (processed window = 768 = 3 × 256, FFT-optimal).
@@ -80,7 +144,9 @@ Parameters used: `rank=5, niter=1, fmax=None, nswx=64, gap_threshold=2.0, ppca_k
 
 ---
 
-## Stage 3 — Adaptive SVD
+## Stage 7 — Adaptive SVD + wavelet-packet thresholding
+
+### Adaptive SVD
 
 Each 2048-sample chunk is extended by 128-sample guard bands on each side before SVD.
 Rank *r* is selected adaptively:
@@ -94,9 +160,7 @@ where `sigma_noise` is the median of the upper half of the singular-value distri
 
 The stored quantity is `U_scaled = U[:, :r] * sv[:r]`  (shape `nc × r`).
 
----
-
-## Stage 4 — Wavelet-packet thresholding
+### Wavelet-packet thresholding
 
 Each of the *r* temporal rows `Vh[k, :]` is decomposed with a db4 wavelet-packet tree
 (level 5).  Per-component hard thresholding:
@@ -138,48 +202,3 @@ read.
 The HDF5 `shuffle` filter is applied to `U_scaled` before gzip.  It reorders bytes by
 significance (all MSBs together, then mantissa bytes), improving gzip compression on
 dense float32 data.
-
----
-
-## Results — flagship PID `eebcaf65` (76.5 min, 384 ch, NP1)
-
-### Parameter sets
-
-Original data: 2500 Hz, Recording length: 4588.45 s (76.47 min), 11,471,120 samples.
-Compression ratios are relative to the original int16 binary (nc × ns × 2 bytes = 8.2 GB).
-
-| Parameter set | ε (SVD) | α (WP) | File size | CR vs int16 binary | RMSE median | RMSE p95 |
-|---|---|---|---|--------------------|---|---|
-| **default** | 150 | 28 | 22 MB | **380×**           | 19 µV | 23 µV |
-| **aggressive** | 450 | 96 | 11 MB | **760×**           | 34 µV | 40 µV |
-
-### Density display — original, Cadzow, compressed, residuals
-
-![Density display](docs/figures/density.png)
-
-*2×5 panel: rows = default / aggressive; columns = original resampled → Cadzow →
-Cadzow−original → compressed → compressed−Cadzow.  Single shared colormap ±190 µV.*
-
-### Average PSD (600 s, nperseg=64)
-
-![PSD comparison](docs/figures/psd.png)
-
-*600 s of data, nperseg=256 (~1 Hz resolution, ~1200 Welch segments).
-Solid lines: signal spectra.  Dashed: residuals after each processing step.
-Default compression (orange) follows Cadzow closely to 125 Hz.
-Aggressive (red) rolls off above ~80 Hz, sacrificing high-frequency content
-for 2× smaller files.*
-
-### RMSE distribution and CR vs RMSE scatter
-
-![RMSE / CR scatter](docs/figures/rmse_cr.png)
-
-### Storage breakdown (default parameters)
-
-| Dataset | Stored | Gzip ratio |
-|---|---|---|
-| U_scaled (dense, shuffle+gzip) | ~11 MB | ~1.2× |
-| Vh_hat sparse (indices + values, gzip) | ~5.4 MB | — |
-| Info-theoretic minimum (U + n_kept floats) | ~17.8 MB | — |
-
-U_scaled dominates (~50% of file) because dense float32 compresses poorly.

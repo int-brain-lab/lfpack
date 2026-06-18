@@ -5,7 +5,7 @@
 </p>
 
 Lossy codec for local-field-potential (LFP) recordings from Neuropixels probes.
-Seven-stage pipeline: bad-channel detection → highpass → decimation → dephasing → CAR → Cadzow denoising → adaptive SVD + wavelet-packet thresholding.
+Eight-stage pipeline: bad-channel detection → dephasing → highpass → bad-channel interpolation → CAR → decimation → Cadzow denoising → adaptive SVD + wavelet-packet thresholding.
 Achieves **>100× compression** with median RMSE < 25 µV.
 
 ---
@@ -86,12 +86,13 @@ Seven sequential stages applied to raw NP1/NP2 LFP data (384 ch, 2500 Hz):
 ```
 raw LFP (2500 Hz)
   └─ 1. Bad-channel detection  → per-channel labels (dead / noisy / outside brain)
-  └─ 2. Highpass filter        → 2 Hz zero-phase 3rd-order Butterworth
-  └─ 3. Decimation             → 250 Hz (FIR anti-aliasing, bad channels interpolated)
-  └─ 4. Dephasing              → sample-shift correction (NP1 only)
+  └─ 2. Dephasing              → sample-shift correction (NP1 only)
+  └─ 3. Highpass filter        → 2 Hz zero-phase 3rd-order Butterworth
+  └─ 4. Bad-channel interpolation → neighbours fill dead / noisy channels
   └─ 5. CAR                    → median common-average reference subtracted
-  └─ 6. Cadzow denoising       → spatially denoised LFP
-  └─ 7. SVD + WP               → rank-r approximation → sparse coefficient storage
+  └─ 6. Decimation             → 250 Hz (FIR anti-aliasing, Q=10)
+  └─ 7. Cadzow denoising       → spatially denoised LFP
+  └─ 8. SVD + WP               → rank-r approximation → sparse coefficient storage
 ```
 
 ---
@@ -99,43 +100,49 @@ raw LFP (2500 Hz)
 ## Stage 1 — Bad-channel detection
 
 Automatic per-channel quality labels (0 = good, 1 = dead, 2 = noisy, 3 = outside brain)
-are assigned via `ibldsp.voltage.detect_bad_channels_cbin` before decimation.
-Bad channels are interpolated from neighbours before the SVD step, preventing incoherent
-channels from inflating the noise-floor estimate and forcing a higher rank.
+are assigned via `ibldsp.voltage.detect_bad_channels_cbin` before any preprocessing.
 
 ---
 
-## Stage 2 — Highpass filter
+## Stage 2 — Dephasing
+
+Sample-shift correction for NP1 probes: each channel is phase-rotated in the frequency
+domain by `exp(1j × angle × sample_shift)` (`ibldsp.fourier.fshift`) to align all
+channels to a common time reference before filtering.
+
+---
+
+## Stage 3 — Highpass filter
 
 3rd-order zero-phase Butterworth highpass at 2 Hz (`scipy.signal.sosfiltfilt`) removes
-slow DC drifts before decimation.
+slow DC drifts.
 
 ---
 
-## Stage 3 — Decimation (2500 → 250 Hz)
+## Stage 4 — Bad-channel interpolation
+
+Dead and noisy channels are replaced by a distance-weighted interpolation from their
+neighbours (`ibldsp.voltage.interpolate_bad_channels`), preventing incoherent channels
+from inflating the noise-floor estimate and forcing a higher SVD rank.
+
+---
+
+## Stage 5 — CAR (common-average reference)
+
+Median across all good channels is subtracted sample-by-sample on the full-bandwidth
+(2500 Hz) signal before decimation.  The removed trace is decimated and saved alongside
+the compressed file as `<stem>_car.npy`.
+
+---
+
+## Stage 6 — Decimation (2500 → 250 Hz)
 
 FIR anti-aliasing (`scipy.signal.decimate`, Q=10) applied in overlapping chunks
 (512-sample filter warmup halo each side) to avoid edge transients.
 
 ---
 
-## Stage 4 — Dephasing
-
-Sample-shift correction for NP1 probes: each channel is phase-rotated in the frequency
-domain by `exp(1j × angle × sample_shift)` to align all channels to a common time
-reference before CAR.
-
----
-
-## Stage 5 — CAR (common-average reference)
-
-Median across all good channels is subtracted sample-by-sample.  The removed trace is
-saved alongside the compressed file as `<stem>_car.npy` for later inspection or
-re-addition.
-
----
-
-## Stage 6 — Cadzow denoising
+## Stage 7 — Cadzow denoising
 
 Spatial denoising via the Cadzow algorithm (`ibldsp.cadzow.cadzow_denoiser`) run in
 640-sample chunks with 64-sample halos (processed window = 768 = 3 × 256, FFT-optimal).
@@ -144,7 +151,7 @@ Parameters used: `rank=5, niter=1, fmax=None, nswx=64, gap_threshold=2.0, ppca_k
 
 ---
 
-## Stage 7 — Adaptive SVD + wavelet-packet thresholding
+## Stage 8 — Adaptive SVD + wavelet-packet thresholding
 
 ### Adaptive SVD
 

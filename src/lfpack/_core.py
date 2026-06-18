@@ -24,21 +24,22 @@ Typical usage
 
 >>> reconstructed, compressed = compress_pipeline(raw_lfp, h=probe_header)
 """
+
 from __future__ import annotations
 
 import dataclasses
 import json as _json
+import os
 from pathlib import Path
 
+import neuropixel
 import numpy as np
 import pywt
 import scipy.signal  # noqa: F401
-
-import neuropixel
 import spikeglx as _spikeglx
 from ibldsp import cadzow as _cadzow
 
-_WP_WAVELET = 'db4'
+_WP_WAVELET = "db4"
 _WP_MAXLEVEL = 5
 
 
@@ -69,6 +70,7 @@ class LFPCompressed:
     ns_extended : int
         Total time samples the WP coefficients represent (0 → use ns_original).
     """
+
     U_scaled: np.ndarray
     Vh_hat: np.ndarray
     ns_original: int
@@ -88,14 +90,14 @@ def _svd_noise_floor(sv: np.ndarray) -> float:
     dead/zeroed channels do not pull the noise floor to zero.
     """
     sv_nz = sv[sv > sv[0] * 1e-4]
-    tail = sv_nz[sv_nz.size // 2:] if sv_nz.size else sv
+    tail = sv_nz[sv_nz.size // 2 :] if sv_nz.size else sv
     return float(np.nanmedian(tail)) if tail.size else float(sv[0])
 
 
 def _count_wp_slots(ns: int) -> int:
     """Total number of leaf wavelet-packet coefficients for a signal of length *ns*."""
     wp = pywt.WaveletPacket(data=np.zeros(ns), wavelet=_WP_WAVELET, maxlevel=_WP_MAXLEVEL)
-    return sum(len(node.data) for node in wp.get_level(_WP_MAXLEVEL, 'natural'))
+    return sum(len(node.data) for node in wp.get_level(_WP_MAXLEVEL, "natural"))
 
 
 def compress(
@@ -133,20 +135,20 @@ def compress(
     n_wp_slots = _count_wp_slots(ns)
     if alpha == 0.0:
         Vh_hat = Vh[:r, :].copy()
-        n_kept = r * ns   # all time-domain samples retained
+        n_kept = r * ns  # all time-domain samples retained
     else:
         Vh_hat = np.zeros((r, n_wp_slots))
         n_kept = 0
         for k in range(r):
             tau_k = alpha * sigma_noise / (sv[k] + 1e-40)
             wp = pywt.WaveletPacket(data=Vh[k], wavelet=_WP_WAVELET, maxlevel=_WP_MAXLEVEL)
-            nodes = wp.get_level(_WP_MAXLEVEL, 'natural')
+            nodes = wp.get_level(_WP_MAXLEVEL, "natural")
             offset = 0
             for node in nodes:
                 mask = np.abs(node.data) >= tau_k
                 n_kept += int(mask.sum())
                 node_len = len(node.data)
-                Vh_hat[k, offset:offset + node_len] = node.data * mask
+                Vh_hat[k, offset : offset + node_len] = node.data * mask
                 offset += node_len
 
     # cr_wp: how much WP thresholding compresses the Vh rows (1.0 when alpha=0)
@@ -184,16 +186,16 @@ def _reconstruct_vh_from_wp(Vh_hat_wp: np.ndarray, ns_extended: int, r: int) -> 
     ndarray (r, ns_extended), float64
     """
     wp_ref = pywt.WaveletPacket(data=np.zeros(ns_extended), wavelet=_WP_WAVELET, maxlevel=_WP_MAXLEVEL)
-    node_sizes = [len(n.data) for n in wp_ref.get_level(_WP_MAXLEVEL, 'natural')]
+    node_sizes = [len(n.data) for n in wp_ref.get_level(_WP_MAXLEVEL, "natural")]
 
     Vh_time = np.zeros((r, ns_extended), dtype=np.float64)
     for k in range(r):
         wp = pywt.WaveletPacket(data=np.zeros(ns_extended), wavelet=_WP_WAVELET, maxlevel=_WP_MAXLEVEL)
-        nodes = wp.get_level(_WP_MAXLEVEL, 'natural')
+        nodes = wp.get_level(_WP_MAXLEVEL, "natural")
         offset = 0
         for i, node in enumerate(nodes):
             sz = node_sizes[i]
-            node.data = Vh_hat_wp[k, offset:offset + sz].astype(np.float64)
+            node.data = Vh_hat_wp[k, offset : offset + sz].astype(np.float64)
             offset += sz
         Vh_time[k] = wp.reconstruct(update=True)[:ns_extended]
     return Vh_time
@@ -217,10 +219,10 @@ def decompress(compressed: LFPCompressed) -> np.ndarray:
 
     lo = compressed.left_overlap
     if compressed.alpha == 0.0:
-        Vh_time = compressed.Vh_hat[:, lo:lo + ns].astype(np.float64)
+        Vh_time = compressed.Vh_hat[:, lo : lo + ns].astype(np.float64)
     else:
         Vh_time_ext = _reconstruct_vh_from_wp(compressed.Vh_hat, ns_ext, r)
-        Vh_time = Vh_time_ext[:, lo:lo + ns]
+        Vh_time = Vh_time_ext[:, lo : lo + ns]
 
     x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
     return np.nan_to_num(x_hat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
@@ -273,7 +275,12 @@ def compress_pipeline(
         h = {k: v[:nc] for k, v in _h.items()}
 
     denoised = _cadzow.cadzow_denoiser(
-        data, h=h, fs=fs, rank=cadzow_rank, niter=cadzow_niter, fmax=cadzow_fmax,
+        data,
+        h=h,
+        fs=fs,
+        rank=cadzow_rank,
+        niter=cadzow_niter,
+        fmax=cadzow_fmax,
     )
     compressed = compress(denoised, epsilon=epsilon, alpha=alpha)
     return decompress(compressed), compressed
@@ -284,8 +291,8 @@ def compress_pipeline(
 # on each side is discarded after denoising, so the written chunk is 640 samples.
 # Compress: 2048 = 2^11 samples per HDF5 chunk; 128-sample guard band on each
 # side covers the db4 level-5 wavelet reconstruction support (~217 samples).
-_CADZOW_CHUNK = 640    # written chunk size = processed window − 2 × halo
-_CADZOW_HALO = 64      # halo each side → processed = 640 + 128 = 768 = 3 × 256
+_CADZOW_CHUNK = 640  # written chunk size = processed window − 2 × halo
+_CADZOW_HALO = 64  # halo each side → processed = 640 + 128 = 768 = 3 × 256
 _COMPRESS_CHUNK = 2048
 _COMPRESS_OVERLAP = 128
 
@@ -295,24 +302,30 @@ def _cadzow_worker(job):
     import numpy as np
     from ibldsp import cadzow as _cadzow_proc
 
-    data = np.lib.format.open_memmap(job['data_path'], mode='r')
-    out = np.lib.format.open_memmap(job['out_path'], mode='r+')
+    data = np.lib.format.open_memmap(job["data_path"], mode="r")
+    out = np.lib.format.open_memmap(job["out_path"], mode="r+")
 
-    ci, chunk, halo, ns = job['ci'], job['chunk'], job['halo'], job['ns']
+    ci, chunk, halo, ns = job["ci"], job["chunk"], job["halo"], job["ns"]
     i0_w = ci * chunk
     i1_w = min(i0_w + chunk, ns)
     i0_r = max(0, i0_w - halo)
     i1_r = min(ns, i1_w + halo)
     left_halo = i0_w - i0_r
 
-    snippet = np.asarray(data[i0_r:i1_r, :], dtype=np.float32).T   # (nc, processed)
+    snippet = np.asarray(data[i0_r:i1_r, :], dtype=np.float32).T  # (nc, processed)
     denoised = _cadzow_proc.cadzow_denoiser(
-        snippet, h=job['h'], fs=job['fs'],
-        rank=job['rank'], niter=job['niter'], fmax=job['fmax'],
-        nswx=job['nswx'], gap_threshold=job['gap_threshold'],
-        ppca_k=job['ppca_k'], n_jobs=1,
+        snippet,
+        h=job["h"],
+        fs=job["fs"],
+        rank=job["rank"],
+        niter=job["niter"],
+        fmax=job["fmax"],
+        nswx=job["nswx"],
+        gap_threshold=job["gap_threshold"],
+        ppca_k=job["ppca_k"],
+        n_jobs=1,
     )
-    out[i0_w:i1_w, :] = denoised[:, left_halo:left_halo + (i1_w - i0_w)].T
+    out[i0_w:i1_w, :] = denoised[:, left_halo : left_halo + (i1_w - i0_w)].T
     out.flush()
     return ci
 
@@ -385,47 +398,96 @@ def run_cadzow_checkpoint(
     out_npy = Path(out_npy)
 
     # Create the output .npy file up-front so workers can open it with mode='r+'
-    out_mm = np.lib.format.open_memmap(str(out_npy), mode='w+', dtype=np.float32, shape=(ns, nc))
+    out_mm = np.lib.format.open_memmap(str(out_npy), mode="w+", dtype=np.float32, shape=(ns, nc))
     del out_mm  # flush header + allocation; workers re-open independently
 
     # Workers need a file path, not an array.  Memmaps expose .filename; otherwise
     # save a temp file so every subprocess can re-open the data without IPC copies.
     _tmp_input = None
-    if hasattr(data, 'filename'):
+    if hasattr(data, "filename"):
         data_path = str(data.filename)
     else:
-        _tmp_input = out_npy.with_suffix('.tmp_input.npy')
+        _tmp_input = out_npy.with_suffix(".tmp_input.npy")
         np.save(_tmp_input, data)
         data_path = str(_tmp_input)
 
     n_chunks = int(np.ceil(ns / chunk))
-    report_every = max(1, n_chunks // 20)
     shared = dict(
-        data_path=data_path, out_path=str(out_npy), ns=ns,
-        chunk=chunk, halo=halo, h=h, fs=fs,
-        rank=rank, niter=niter, fmax=fmax,
-        nswx=nswx, gap_threshold=gap_threshold, ppca_k=ppca_k,
+        data_path=data_path,
+        out_path=str(out_npy),
+        ns=ns,
+        chunk=chunk,
+        halo=halo,
+        h=h,
+        fs=fs,
+        rank=rank,
+        niter=niter,
+        fmax=fmax,
+        nswx=nswx,
+        gap_threshold=gap_threshold,
+        ppca_k=ppca_k,
     )
-    jobs = [{**shared, 'ci': ci} for ci in range(n_chunks)]
+    jobs = [{**shared, "ci": ci} for ci in range(n_chunks)]
 
-    n_done = 0
-    with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-        futures = {pool.submit(_cadzow_worker, job): job['ci'] for job in jobs}
-        for fut in as_completed(futures):
-            fut.result()   # re-raise any worker exception immediately
-            n_done += 1
-            if n_done % report_every == 0:
-                print(f'  Cadzow {n_done}/{n_chunks} ({100 * n_done / n_chunks:.0f}%)', flush=True)
+    from tqdm import tqdm
+
+    n_workers = os.cpu_count() if n_jobs == -1 else n_jobs
+    ctx = __import__("multiprocessing").get_context("spawn")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
+        futures = {pool.submit(_cadzow_worker, job): job["ci"] for job in jobs}
+        with tqdm(total=n_chunks, desc="Cadzow", unit="chunk") as pbar:
+            for fut in as_completed(futures):
+                fut.result()  # re-raise any worker exception immediately
+                pbar.update(1)
 
     if _tmp_input is not None:
         _tmp_input.unlink()
 
-    return np.load(out_npy, mmap_mode='r')
+    return np.load(out_npy, mmap_mode="r")
+
+
+def _compress_chunk_worker(args):
+    """Compress one chunk (module-level for pickling by ProcessPoolExecutor)."""
+    npy_path, i0_r, i1_r, n_w, left_ov, epsilon, alpha = args
+    data = np.load(npy_path, mmap_mode="r")
+    snippet = np.asarray(data[i0_r:i1_r, :], dtype=np.float32).T
+    c = compress(snippet, epsilon=epsilon, alpha=alpha)
+    reconstructed = decompress(c)
+    rmse = float(
+        np.sqrt(
+            np.mean(
+                (
+                    snippet[:, left_ov : left_ov + n_w].astype(np.float64)
+                    - reconstructed[:, left_ov : left_ov + n_w].astype(np.float64)
+                )
+                ** 2
+            )
+        )
+    )
+    flat = c.Vh_hat.ravel()
+    vh_idx = np.flatnonzero(flat).astype(np.int32)
+    return {
+        "U_scaled": c.U_scaled,
+        "vh_indices": vh_idx,
+        "vh_values": flat[vh_idx],
+        "vh_shape": c.Vh_hat.shape,
+        "ns_original": n_w,
+        "ns_extended": snippet.shape[1],
+        "left_overlap": left_ov,
+        "epsilon": epsilon,
+        "alpha": alpha,
+        "cr_svd": c.cr_svd,
+        "cr_wp": c.cr_wp,
+        "cr_total": c.cr_total,
+        "rmse": rmse,
+    }
 
 
 def compress_to_h5(
     cadzow_npy,
     out_h5,
+    recording,
+    scale=0,
     sglx_meta=None,
     h=None,
     chunk=_COMPRESS_CHUNK,
@@ -433,6 +495,7 @@ def compress_to_h5(
     epsilon=150.0,
     alpha=28.0,
     fs=250.0,
+    n_jobs=4,
 ):
     """
     Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
@@ -444,12 +507,18 @@ def compress_to_h5(
 
     HDF5 layout
     -----------
-    /meta             attrs: nc, ns_total, fs, compress_chunk, compress_overlap,
-                             epsilon, alpha, sglx_meta (JSON), geometry_x, geometry_y
-    /chunks/<i>/      datasets: U_scaled (nc, r), vh_indices (n_kept,) int32,
-                                vh_values (n_kept,) float32
-                      attrs: ns_original, ns_extended, left_overlap, vh_shape,
-                             epsilon, alpha, cr_svd, cr_wp, cr_total, rmse
+    /<recording>/<scale_str>/meta        attrs: nc, ns_total, fs, compress_chunk,
+                                                compress_overlap, epsilon, alpha,
+                                                sglx_meta (JSON), geometry_x, geometry_y
+    /<recording>/<scale_str>/chunks/<i>/ datasets: U_scaled (nc, r),
+                                                   vh_indices (n_kept,) int32,
+                                                   vh_values (n_kept,) float32
+                                         attrs: ns_original, ns_extended, left_overlap,
+                                                vh_shape, epsilon, alpha, cr_svd, cr_wp,
+                                                cr_total, rmse
+
+    where <scale_str> = f'{scale:02d}', e.g. '00', '01', …  Multiple recordings and/or
+    scales can coexist in a single file; merging two files is a plain group copy.
 
     Parameters
     ----------
@@ -457,6 +526,12 @@ def compress_to_h5(
         Path to the (ns, nc) float32 Cadzow checkpoint (time-first).
     out_h5 : path-like
         Output HDF5 file (created or overwritten).
+    recording : str
+        Unique key for this recording (e.g. a probe-insertion UUID).  Top-level HDF5
+        group name; allows multiple recordings to coexist in one file.
+    scale : int
+        Resolution level (zero-padded to two digits in the path).  0 = base resolution.
+        Default 0.
     sglx_meta : dict or None
         Original spikeglx metadata (sr.meta).  Stored verbatim as JSON.
     h : dict or None
@@ -474,7 +549,7 @@ def compress_to_h5(
     """
     import h5py
 
-    data = np.load(cadzow_npy, mmap_mode='r')  # (ns, nc) time-first
+    data = np.load(cadzow_npy, mmap_mode="r")  # (ns, nc) time-first
     ns, nc = data.shape
     if h is None:
         _h = neuropixel.trace_header(version=1)
@@ -482,91 +557,92 @@ def compress_to_h5(
 
     out_h5 = Path(out_h5)
     n_chunks = int(np.ceil(ns / chunk))
-    report_every = max(1, n_chunks // 20)
     total_cr = 0.0
 
-    with h5py.File(out_h5, 'w') as f:
-        mg = f.create_group('meta')
-        mg.attrs['nc'] = nc
-        mg.attrs['ns_total'] = ns
-        mg.attrs['fs'] = fs
-        mg.attrs['compress_chunk'] = chunk
-        mg.attrs['compress_overlap'] = overlap
-        mg.attrs['epsilon'] = epsilon
-        mg.attrs['alpha'] = alpha
-        mg.attrs['sglx_meta'] = _json.dumps(sglx_meta or {})
-        mg.attrs['geometry_x'] = h['x'].astype(np.float32)
-        mg.attrs['geometry_y'] = h['y'].astype(np.float32)
+    from tqdm import tqdm
 
-        cg = f.create_group('chunks')
-        for ci in range(n_chunks):
-            i0_w = ci * chunk
-            i1_w = min(i0_w + chunk, ns)
-            n_w = i1_w - i0_w
-            i0_r = max(0, i0_w - overlap)
-            i1_r = min(ns, i1_w + overlap)
-            left_ov = i0_w - i0_r
+    jobs = []
+    for ci in range(n_chunks):
+        i0_w = ci * chunk
+        i1_w = min(i0_w + chunk, ns)
+        n_w = i1_w - i0_w
+        i0_r = max(0, i0_w - overlap)
+        i1_r = min(ns, i1_w + overlap)
+        jobs.append((str(cadzow_npy), i0_r, i1_r, n_w, i0_w - i0_r, epsilon, alpha))
 
-            # Transpose to (nc, n_samples) for compress(), which expects channels-first
-            snippet = np.asarray(data[i0_r:i1_r, :], dtype=np.float32).T
-            ns_ext = snippet.shape[1]
-            c = compress(snippet, epsilon=epsilon, alpha=alpha)
+    root = f"{recording}/{scale:02d}"
+    with h5py.File(out_h5, "w", libver="latest") as f:
+        mg = f.create_group(f"{root}/meta")
+        mg.attrs["nc"] = nc
+        mg.attrs["ns_total"] = ns
+        mg.attrs["fs"] = fs
+        mg.attrs["compress_chunk"] = chunk
+        mg.attrs["compress_overlap"] = overlap
+        mg.attrs["epsilon"] = epsilon
+        mg.attrs["alpha"] = alpha
+        mg.attrs["sglx_meta"] = _json.dumps(sglx_meta or {})
+        mg.attrs["geometry_x"] = h["x"].astype(np.float32)
+        mg.attrs["geometry_y"] = h["y"].astype(np.float32)
 
-            # RMSE on the central n_w samples (guard bands excluded)
-            reconstructed = decompress(c)  # (nc, ns_ext)
-            rmse = float(np.sqrt(np.mean((snippet[:, left_ov:left_ov + n_w].astype(np.float64)
-                                          - reconstructed[:, left_ov:left_ov + n_w].astype(np.float64)) ** 2)))
+        cg = f.create_group(f"{root}/chunks")
+        from joblib import Parallel, delayed
 
-            # Sparse Vh_hat: two contiguous 1-D arrays (indices, values)
-            flat = c.Vh_hat.ravel()
-            vh_idx = np.flatnonzero(flat).astype(np.int32)
-            vh_vals = flat[vh_idx]
-
+        results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(_compress_chunk_worker)(job) for job in tqdm(jobs, desc="Compress", unit="chunk")
+        )
+        for ci, r in enumerate(results):
             grp = cg.create_group(str(ci))
-            grp.create_dataset('U_scaled',   data=c.U_scaled, compression='gzip', shuffle=True)
-            grp.create_dataset('vh_indices', data=vh_idx,  compression='gzip', shuffle=True)
-            grp.create_dataset('vh_values',  data=vh_vals, compression='gzip', shuffle=True)
-            grp.attrs['vh_shape'] = c.Vh_hat.shape
-            grp.attrs['ns_original'] = n_w
-            grp.attrs['ns_extended'] = ns_ext
-            grp.attrs['left_overlap'] = left_ov
-            grp.attrs['epsilon'] = epsilon
-            grp.attrs['alpha'] = alpha
-            grp.attrs['cr_svd'] = c.cr_svd
-            grp.attrs['cr_wp'] = c.cr_wp
-            grp.attrs['cr_total'] = c.cr_total
-            grp.attrs['rmse'] = rmse
-            total_cr += c.cr_total
+            grp.create_dataset("U_scaled", data=r["U_scaled"], compression="gzip", shuffle=True)
+            grp.create_dataset("vh_indices", data=r["vh_indices"], compression="gzip", shuffle=True)
+            grp.create_dataset("vh_values", data=r["vh_values"], compression="gzip", shuffle=True)
+            grp.attrs["vh_shape"] = r["vh_shape"]
+            grp.attrs["ns_original"] = r["ns_original"]
+            grp.attrs["ns_extended"] = r["ns_extended"]
+            grp.attrs["left_overlap"] = r["left_overlap"]
+            grp.attrs["epsilon"] = r["epsilon"]
+            grp.attrs["alpha"] = r["alpha"]
+            grp.attrs["cr_svd"] = r["cr_svd"]
+            grp.attrs["cr_wp"] = r["cr_wp"]
+            grp.attrs["cr_total"] = r["cr_total"]
+            grp.attrs["rmse"] = r["rmse"]
+            total_cr += r["cr_total"]
 
-            if ci % report_every == 0:
-                print(f'  Compress {ci + 1}/{n_chunks}  CR={c.cr_total:.0f}  RMSE={rmse * 1e6:.2f} µV')
-
-    print(f'Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}')
+    print(f"Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}")
     return out_h5
 
 
 def compress_bin_to_h5(
     bin_file,
     out_h5,
+    recording=None,
     q=10,
     h=None,
-    cadzow_rank=5,
-    cadzow_niter=1,
-    cadzow_fmax=None,
-    cadzow_nswx=64,
-    cadzow_gap_threshold=2.0,
-    cadzow_ppca_k=2.0,
+    cadzow_checkpoint_file=None,
+    cadzow_kwargs=None,
+    channel_labels=None,
     epsilon=150.0,
     alpha=28.0,
     n_jobs=4,
     chunk=_COMPRESS_CHUNK,
     overlap=_COMPRESS_OVERLAP,
+    highpass_cutoff=2.0,
+    car=True,
+    fig_dir=None,
 ):
     """
     Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
 
-    No intermediate files are written.  All three stages run in a single streaming pass
-    over the data, one compress chunk at a time.
+    Decimation uses ibldsp.voltage.resample_denoise_lfp_cbin (FIR anti-aliasing).  Cadzow
+    denoising is performed inside each decimation worker when *cadzow_kwargs* is provided.
+    An intermediate float32 checkpoint (.npy) is always written — either to the path given
+    by *cadzow_checkpoint_file* or to a sibling temp file that is deleted after the HDF5 is
+    finalised.  If the checkpoint file already exists its contents are used directly, skipping
+    the expensive decimate+denoise step.
+
+    Bad channels are detected automatically (via ibldsp.voltage.detect_bad_channels_cbin)
+    before decimation unless *channel_labels* is supplied or the checkpoint already exists.
+    Detected bad channels are interpolated by resample_denoise_lfp_cbin before SVD, which
+    prevents incoherent channels from collapsing the noise-floor estimate and inflating rank.
 
     Parameters
     ----------
@@ -574,143 +650,130 @@ def compress_bin_to_h5(
         SpikeGLX LFP binary (.cbin or .bin).  The .meta file must be in the same directory.
     out_h5 : path-like
         Output HDF5 file (created or overwritten).
+    recording : str or None
+        Unique key for this recording (e.g. a probe-insertion UUID).  Stored as the
+        top-level HDF5 group; multiple recordings can coexist in one file.
+        Defaults to the stem of bin_file when None.
     q : int
         Decimation factor.  Default 10 (2500 → 250 Hz).
     h : dict or None
         Probe header with keys 'x' and 'y'.  Defaults to NP1 geometry for nc channels.
-    cadzow_rank : int
-        Cadzow SVD rank.  Default 5.
-    cadzow_niter : int
-        Cadzow iterations.  Default 1.
-    cadzow_fmax : float or None
-        Max frequency for Cadzow [Hz].  Default None (Nyquist).
-    cadzow_nswx : int
-        Cadzow channel-window width.  Default 64.
-    cadzow_gap_threshold : float
-        Adaptive-rank gap threshold.  Default 2.0.
-    cadzow_ppca_k : float
-        PPCA outlier-suppression threshold.  Default 2.0.
+    cadzow_checkpoint_file : path-like or None
+        Path for the intermediate Cadzow .npy checkpoint (ns_lf, nc) float32.
+        If None a temporary file is written next to out_h5 and deleted afterwards.
+        If the file already exists the decimate+Cadzow step is skipped entirely.
+    cadzow_kwargs : dict or None
+        Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match
+        ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx,
+        gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).
+    channel_labels : np.ndarray or None
+        Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain).
+        If None and the checkpoint does not exist, labels are auto-detected via
+        ibldsp.voltage.detect_bad_channels_cbin.  Pass an array of zeros to skip
+        detection explicitly.
     epsilon : float
         SVD threshold multiplier.  Default 150.
     alpha : float
         WP threshold multiplier.  Default 28.
     n_jobs : int
-        Parallel workers for Cadzow per chunk.  Default 4.
+        Parallel workers for the decimate+Cadzow stage.  Default 4.
     chunk : int
         Compress chunk size in decimated samples.  Default 2048.
     overlap : int
         SVD guard-band samples each side.  Default 128.
+    highpass_cutoff : float or None
+        3rd-order Butterworth zero-phase highpass corner [Hz] applied before decimation.
+        Default 2.0 Hz.  None disables the filter.
+    car : bool
+        Apply median common-average reference before decimation.  Default True.
+    fig_dir : path-like or None
+        If set, a bad-channel diagnostic figure is saved to this directory after detection.
+        Uses ibldsp.plots.show_channels_labels on a single mid-recording batch.
+        Filename: ``bad_channels_{bin_file.stem}.png``.  Default None (no figure).
 
     Returns
     -------
     Path
         Path to the output HDF5 file.
     """
-    import h5py
-    from scipy.signal import cheby1, sosfilt
+    from ibldsp.voltage import detect_bad_channels_cbin, resample_denoise_lfp_cbin
 
     bin_file = Path(bin_file)
     out_h5 = Path(out_h5)
+    if recording is None:
+        recording = bin_file.stem
+    n_jobs = os.cpu_count() if n_jobs == -1 else n_jobs
 
     sr = _spikeglx.Reader(bin_file)
-    fs_raw = sr.fs
-    fs_lf = fs_raw / q
     nc = sr.nc - sr.nsync
-    ns_raw = sr.ns
-    ns_lf = ns_raw // q
+    fs_lf = sr.fs / q
+    sglx_meta = sr.meta
 
     if h is None:
         _h = neuropixel.trace_header(version=1)
         h = {k: v[:nc] for k, v in _h.items()}
 
-    # Chebyshev type-I IIR anti-aliasing (same spec as scipy.signal.decimate default)
-    sos = cheby1(8, 0.05, 0.8 / q, output='sos')
-    # 0.2 s IIR guard on each side to let the filter settle before trimming
-    iir_guard = int(np.round(0.2 * fs_raw))
+    # Determine checkpoint path
+    if cadzow_checkpoint_file is None:
+        cadzow_npy = out_h5.with_suffix(".cadzow_tmp.npy")
+        delete_checkpoint = True
+    else:
+        cadzow_npy = Path(cadzow_checkpoint_file)
+        delete_checkpoint = False
 
-    n_chunks = int(np.ceil(ns_lf / chunk))
-    report_every = max(1, n_chunks // 20)
-    total_cr = 0.0
+    # Stage 1: decimate (+ optional Cadzow) → float32 checkpoint
+    if cadzow_npy.exists():
+        print(f"Using existing Cadzow checkpoint {cadzow_npy}")
+    else:
+        if channel_labels is None:
+            print("Detecting bad channels …")
+            channel_labels, xfeats_med = detect_bad_channels_cbin(sr, return_features=True)
+            n_bad = int(np.sum(channel_labels != 0))
+            print(f"  {n_bad} / {nc} channels flagged (labels: {np.unique(channel_labels, return_counts=True)})")
+            if fig_dir is not None:
+                import matplotlib.pyplot as plt
+                from ibldsp.plots import show_channels_labels
 
-    with h5py.File(out_h5, 'w') as f:
-        mg = f.create_group('meta')
-        mg.attrs['nc'] = nc
-        mg.attrs['ns_total'] = ns_lf
-        mg.attrs['fs'] = fs_lf
-        mg.attrs['compress_chunk'] = chunk
-        mg.attrs['compress_overlap'] = overlap
-        mg.attrs['epsilon'] = epsilon
-        mg.attrs['alpha'] = alpha
-        mg.attrs['sglx_meta'] = _json.dumps(sr.meta or {})
-        mg.attrs['geometry_x'] = h['x'].astype(np.float32)
-        mg.attrs['geometry_y'] = h['y'].astype(np.float32)
+                batch_dur = 1e4 / sr.fs
+                t_mid = (sr.rl - batch_dur) / 2
+                sl = slice(int(t_mid * sr.fs), int((t_mid + batch_dur) * sr.fs))
+                raw_batch = sr[sl, :nc].T
+                fig, _ = show_channels_labels(raw_batch, sr.fs, channel_labels, xfeats_med, psd_hf_threshold=1.4)
+                fig.suptitle(bin_file.stem, fontsize=9)
+                fig_path = Path(fig_dir).joinpath(f"bad_channels_{bin_file.stem}.png")
+                fig.savefig(fig_path, dpi=150)
+                plt.close(fig)
+                print(f"  Channel labels figure → {fig_path}")
+        resample_denoise_lfp_cbin(
+            bin_file,
+            q=q,
+            output=cadzow_npy,
+            dtype=np.float32,
+            channel_labels=channel_labels,
+            highpass_cutoff=highpass_cutoff,
+            car=car,
+            cadzow_kwargs=cadzow_kwargs,
+            n_jobs=n_jobs,
+        )
 
-        cg = f.create_group('chunks')
-        for ci in range(n_chunks):
-            # Decimated written range
-            i0_lf = ci * chunk
-            i1_lf = min(i0_lf + chunk, ns_lf)
-            n_w = i1_lf - i0_lf
+    # Stage 2: compress checkpoint → HDF5
+    compress_to_h5(
+        cadzow_npy,
+        out_h5,
+        recording=recording,
+        sglx_meta=sglx_meta,
+        h=h,
+        chunk=chunk,
+        overlap=overlap,
+        epsilon=epsilon,
+        alpha=alpha,
+        fs=fs_lf,
+        n_jobs=n_jobs,
+    )
 
-            # Extend with SVD overlap
-            i0_lf_ext = max(0, i0_lf - overlap)
-            i1_lf_ext = min(ns_lf, i1_lf + overlap)
-            left_ov = i0_lf - i0_lf_ext
-            n_ext = i1_lf_ext - i0_lf_ext
+    if delete_checkpoint:
+        cadzow_npy.unlink()
 
-            # Corresponding raw range + IIR guard
-            i0_raw = max(0, i0_lf_ext * q - iir_guard)
-            i1_raw = min(ns_raw, i1_lf_ext * q + iir_guard)
-            left_guard = i0_lf_ext * q - i0_raw  # actual left guard in raw samples
-
-            # Read (n_raw, nc+sync) → (nc, n_raw) float32 in volts
-            raw = sr.read(nsel=slice(i0_raw, i1_raw))[0][:, :nc].T.astype(np.float32)
-
-            # Filter all channels at once, then downsample
-            filtered = sosfilt(sos, raw, axis=1)           # (nc, n_raw)
-            left_trim = left_guard // q
-            decimated = filtered[:, ::q][:, left_trim:left_trim + n_ext].astype(np.float32)
-
-            # Cadzow spatial denoising
-            denoised = _cadzow.cadzow_denoiser(
-                decimated, h=h, fs=fs_lf,
-                rank=cadzow_rank, niter=cadzow_niter, fmax=cadzow_fmax,
-                nswx=cadzow_nswx, gap_threshold=cadzow_gap_threshold,
-                ppca_k=cadzow_ppca_k, n_jobs=n_jobs,
-            )
-
-            # SVD + WP compress
-            c = compress(denoised, epsilon=epsilon, alpha=alpha)
-            reconstructed = decompress(c)
-            rmse = float(np.sqrt(np.mean(
-                (denoised[:, left_ov:left_ov + n_w].astype(np.float64)
-                 - reconstructed[:, left_ov:left_ov + n_w].astype(np.float64)) ** 2
-            )))
-
-            flat = c.Vh_hat.ravel()
-            vh_idx = np.flatnonzero(flat).astype(np.int32)
-            vh_vals = flat[vh_idx]
-
-            grp = cg.create_group(str(ci))
-            grp.create_dataset('U_scaled',   data=c.U_scaled, compression='gzip', shuffle=True)
-            grp.create_dataset('vh_indices', data=vh_idx,     compression='gzip', shuffle=True)
-            grp.create_dataset('vh_values',  data=vh_vals,    compression='gzip', shuffle=True)
-            grp.attrs['vh_shape']     = c.Vh_hat.shape
-            grp.attrs['ns_original']  = n_w
-            grp.attrs['ns_extended']  = n_ext
-            grp.attrs['left_overlap'] = left_ov
-            grp.attrs['epsilon']      = epsilon
-            grp.attrs['alpha']        = alpha
-            grp.attrs['cr_svd']       = c.cr_svd
-            grp.attrs['cr_wp']        = c.cr_wp
-            grp.attrs['cr_total']     = c.cr_total
-            grp.attrs['rmse']         = rmse
-            total_cr += c.cr_total
-
-            if ci % report_every == 0:
-                print(f'  Chunk {ci + 1}/{n_chunks}  CR={c.cr_total:.0f}  RMSE={rmse * 1e6:.2f} µV')
-
-    print(f'Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}')
     return out_h5
 
 
@@ -722,53 +785,116 @@ class LFPackReader(_spikeglx.Reader):
     sync=True returns None as the second element.  Data is returned in volts (float32)
     in the same (n_samples, n_channels) convention as spikeglx.Reader.
 
+    The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
+    A file may contain multiple recordings and/or multiple scale levels.  When a file
+    contains exactly one recording the key is auto-detected; otherwise pass recording=.
+
     Parameters
     ----------
     h5_file : path-like
         HDF5 archive produced by compress_to_h5.
+    recording : str or None
+        Recording key (top-level group name).  Auto-detected when the file contains
+        exactly one recording; raises ValueError for multi-recording files.
+    scale : int
+        Resolution level to open.  0 = base (full LFP rate).  Default 0.
 
     Examples
     --------
     >>> sr = LFPackReader('lf_compressed.h5')
     >>> data, _ = sr.read_samples(0, 2500)    # (2500, nc) float32, volts
-    >>> snippet = sr[0:2500]                  # same, sync omitted
+    >>> sr2 = LFPackReader('multi.h5', recording='abc123', scale=0)
     """
 
-    def __init__(self, h5_file):
+    def __init__(self, h5_file, recording=None, scale=0):
         import h5py
 
         self._h5_file = Path(h5_file)
         self._h5 = None
-        self._raw = None   # is_open sentinel (None → closed)
+        self._raw = None  # is_open sentinel (None → closed)
         self.geometry = None
         self.ignore_warnings = False
         self.file_bin = self._h5_file
         self.file_meta_data = None
-        self.meta = None   # None → base-class properties fall back to _nc/_fs/_ns
-        self.dtype = np.dtype('float32')
+        self.meta = None  # None → base-class properties fall back to _nc/_fs/_ns
+        self.dtype = np.dtype("float32")
         self.ch_file = None
 
-        with h5py.File(self._h5_file, 'r') as f:
-            attrs = f['meta'].attrs
-            self._nc = int(attrs['nc'])
-            self._ns = int(attrs['ns_total'])
-            self._fs = float(attrs['fs'])
-            self._compress_chunk = int(attrs['compress_chunk'])
-            self._n_chunks = len(f['chunks'])
-            self.sglx_meta = _json.loads(attrs['sglx_meta'])
+        with h5py.File(self._h5_file, "r") as f:
+            if "meta" in f:  # legacy single-recording format (no recording/scale hierarchy)
+                self._root = None
+            else:
+                root_keys = list(f.keys())
+                if recording is None:
+                    if len(root_keys) == 1:
+                        recording = root_keys[0]
+                    else:
+                        raise ValueError(f"Multiple recordings in file, specify recording= from: {root_keys}")
+                elif recording not in f:
+                    raise KeyError(f"Recording '{recording}' not found. Available: {root_keys}")
+                self._root = f"{recording}/{scale:02d}"
+            meta_path = f"{self._root}/meta" if self._root else "meta"
+            chunks_path = f"{self._root}/chunks" if self._root else "chunks"
+            attrs = f[meta_path].attrs
+            self._nc = int(attrs["nc"])
+            self._ns = int(attrs["ns_total"])
+            self._fs = float(attrs["fs"])
+            self._compress_chunk = int(attrs["compress_chunk"])
+            self._n_chunks = len(f[chunks_path])
+            self.sglx_meta = _json.loads(attrs["sglx_meta"])
             self.geometry = {
-                'x': attrs['geometry_x'][:].astype(np.float32),
-                'y': attrs['geometry_y'][:].astype(np.float32),
+                "x": attrs["geometry_x"][:].astype(np.float32),
+                "y": attrs["geometry_y"][:].astype(np.float32),
             }
 
         self._nsync = 0
         # Data is already in volts; s2v = 1.0 for all channels.
-        self.channel_conversion_sample2v = {'samples': np.ones(self._nc, dtype=np.float32)}
+        self.channel_conversion_sample2v = {"samples": np.ones(self._nc, dtype=np.float32)}
         self.open()
+
+    @staticmethod
+    def recordings(h5_file):
+        """List recording keys at the root of an H5 file written by compress_to_h5.
+
+        Parameters
+        ----------
+        h5_file : path-like
+
+        Returns
+        -------
+        list of str
+        """
+        import h5py
+
+        with h5py.File(h5_file, "r") as f:
+            if "meta" in f:  # legacy format
+                return []
+            return list(f.keys())
+
+    @staticmethod
+    def scales(h5_file, recording):
+        """List scale indices available for a recording.
+
+        Parameters
+        ----------
+        h5_file : path-like
+        recording : str
+
+        Returns
+        -------
+        list of int
+        """
+        import h5py
+
+        with h5py.File(h5_file, "r") as f:
+            if recording not in f:
+                raise KeyError(f"Recording '{recording}' not found")
+            return sorted(int(k) for k in f[recording].keys())
 
     def open(self):
         import h5py
-        self._h5 = h5py.File(self._h5_file, 'r')
+
+        self._h5 = h5py.File(self._h5_file, "r")
         self._raw = True  # non-None sentinel so base-class is_open returns True
 
     def close(self):
@@ -832,29 +958,30 @@ class LFPackReader(_spikeglx.Reader):
 
         pieces = []
         for ci in range(first_chunk, last_chunk + 1):
-            grp = self._h5[f'chunks/{ci}']
-            ns_orig = int(grp.attrs['ns_original'])
+            chunk_path = f"{self._root}/chunks/{ci}" if self._root else f"chunks/{ci}"
+            grp = self._h5[chunk_path]
+            ns_orig = int(grp.attrs["ns_original"])
             # Reconstruct dense Vh_hat from sparse storage
-            vh_shape = tuple(int(x) for x in grp.attrs['vh_shape'])
+            vh_shape = tuple(int(x) for x in grp.attrs["vh_shape"])
             Vh_hat = np.zeros(vh_shape, dtype=np.float32)
-            Vh_hat.ravel()[grp['vh_indices'][:]] = grp['vh_values'][:]
+            Vh_hat.ravel()[grp["vh_indices"][:]] = grp["vh_values"][:]
             c = LFPCompressed(
-                U_scaled=grp['U_scaled'][:],
+                U_scaled=grp["U_scaled"][:],
                 Vh_hat=Vh_hat,
                 ns_original=ns_orig,
-                epsilon=float(grp.attrs['epsilon']),
-                alpha=float(grp.attrs['alpha']),
-                cr_svd=float(grp.attrs['cr_svd']),
-                cr_wp=float(grp.attrs['cr_wp']),
-                cr_total=float(grp.attrs['cr_total']),
-                left_overlap=int(grp.attrs.get('left_overlap', 0)),
-                ns_extended=int(grp.attrs.get('ns_extended', ns_orig)),
+                epsilon=float(grp.attrs["epsilon"]),
+                alpha=float(grp.attrs["alpha"]),
+                cr_svd=float(grp.attrs["cr_svd"]),
+                cr_wp=float(grp.attrs["cr_wp"]),
+                cr_total=float(grp.attrs["cr_total"]),
+                left_overlap=int(grp.attrs.get("left_overlap", 0)),
+                ns_extended=int(grp.attrs.get("ns_extended", ns_orig)),
             )
             pieces.append(decompress(c))  # (nc, ns_chunk_i)
 
         full = np.concatenate(pieces, axis=1)  # (nc, total_samples)
         start = first_sample - first_chunk * chunk
-        data = full[:, start:start + (last_sample - first_sample)]  # (nc, n_req)
+        data = full[:, start : start + (last_sample - first_sample)]  # (nc, n_req)
 
         # Transpose to spikeglx convention (n_samples, nc)
         data = data.T.astype(np.float32)

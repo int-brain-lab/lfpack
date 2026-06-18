@@ -3,9 +3,10 @@
 Lossy encode/decode pipeline: decimation → Cadzow denoising → adaptive SVD
 → wavelet-packet thresholding → HDF5 storage.
 """
+
 from lfpack._core import (  # noqa: F401
-    LFPCompressed,
     LFPackReader,
+    LFPCompressed,
     compress,
     compress_bin_to_h5,
     compress_pipeline,

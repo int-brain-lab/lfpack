@@ -31,5 +31,14 @@ packages = ["src/lfpack"]
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+    "ruff>=0.4.0",
+]

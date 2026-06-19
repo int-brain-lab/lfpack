@@ -201,17 +201,22 @@ def _reconstruct_vh_from_wp(Vh_hat_wp: np.ndarray, ns_extended: int, r: int) -> 
     return Vh_time
 
 
-def decompress(compressed: LFPCompressed) -> np.ndarray:
+def decompress(compressed: LFPCompressed, bin_channels: int = 1) -> np.ndarray:
     """
     Reconstruct LFP data from a compressed representation.
 
     Parameters
     ----------
     compressed : LFPCompressed
+    bin_channels : int
+        Number of adjacent channels to sum together (spatial binning).  ``1``
+        means no binning.  Must evenly divide ``nc`` or trailing channels are
+        silently dropped.  When > 1, the full ``(nc, ns)`` array is never
+        materialised; only the binned ``(nc // bin_channels, ns)`` result is.
 
     Returns
     -------
-    ndarray of shape (nc, ns_original), float32
+    ndarray of shape (nc // bin_channels, ns_original), float32
     """
     r = compressed.U_scaled.shape[1]
     ns = compressed.ns_original
@@ -224,7 +229,16 @@ def decompress(compressed: LFPCompressed) -> np.ndarray:
         Vh_time_ext = _reconstruct_vh_from_wp(compressed.Vh_hat, ns_ext, r)
         Vh_time = Vh_time_ext[:, lo : lo + ns]
 
-    x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
+    if bin_channels > 1:
+        # Sum U_scaled rows in groups before the matrix multiply so the result
+        # is (nc_binned, ns) rather than (nc, ns) — no large intermediate.
+        nc = compressed.U_scaled.shape[0]
+        nc_binned = nc // bin_channels
+        U = compressed.U_scaled[: nc_binned * bin_channels].astype(np.float64)
+        U_binned = U.reshape(nc_binned, bin_channels, r).sum(axis=1)
+        x_hat = U_binned @ Vh_time
+    else:
+        x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
     return np.nan_to_num(x_hat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
@@ -798,27 +812,38 @@ class LFPackReader(_spikeglx.Reader):
         exactly one recording; raises ValueError for multi-recording files.
     scale : int
         Resolution level to open.  0 = base (full LFP rate).  Default 0.
+    bin_channels : int
+        Number of adjacent channels to sum together on every read.  ``1``
+        (default) means no binning.  When set, ``nc``, ``shape``, and
+        ``geometry`` all reflect the binned dimension, and slicing
+        (``sr[0:2500, :]``) returns ``(n_samples, nc // bin_channels)``
+        without any extra arguments.
 
     Examples
     --------
     >>> sr = LFPackReader('lf_compressed.h5')
-    >>> data, _ = sr.read_samples(0, 2500)    # (2500, nc) float32, volts
-    >>> sr2 = LFPackReader('multi.h5', recording='abc123', scale=0)
+    >>> sr[0:2500, :]                              # (2500, nc)
+    >>> sr4 = LFPackReader('lf_compressed.h5', bin_channels=4)
+    >>> sr4[0:2500, :]                             # (2500, nc // 4)
+    >>> sr4.nc                                     # nc // 4
+    >>> sr4.shape                                  # (ns, nc // 4)
+    >>> sr4.geometry['y'].shape                    # (nc // 4,)
     """
 
-    def __init__(self, h5_file, recording=None, scale=0):
+    def __init__(self, h5_file, recording=None, scale=0, bin_channels=1):
         import h5py
 
         self._h5_file = Path(h5_file)
         self._h5 = None
         self._raw = None  # is_open sentinel (None → closed)
-        self.geometry = None
+        self._geometry = None
         self.ignore_warnings = False
         self.file_bin = self._h5_file
         self.file_meta_data = None
         self.meta = None  # None → base-class properties fall back to _nc/_fs/_ns
         self.dtype = np.dtype("float32")
         self.ch_file = None
+        self._bin_channels = bin_channels
 
         with h5py.File(self._h5_file, "r") as f:
             if "meta" in f:  # legacy single-recording format (no recording/scale hierarchy)
@@ -842,7 +867,7 @@ class LFPackReader(_spikeglx.Reader):
             self._compress_chunk = int(attrs["compress_chunk"])
             self._n_chunks = len(f[chunks_path])
             self.sglx_meta = _json.loads(attrs["sglx_meta"])
-            self.geometry = {
+            self._geometry = {
                 "x": attrs["geometry_x"][:].astype(np.float32),
                 "y": attrs["geometry_y"][:].astype(np.float32),
             }
@@ -851,6 +876,58 @@ class LFPackReader(_spikeglx.Reader):
         # Data is already in volts; s2v = 1.0 for all channels.
         self.channel_conversion_sample2v = {"samples": np.ones(self._nc, dtype=np.float32)}
         self.open()
+
+    @property
+    def bin_channels(self):
+        """Number of adjacent channels summed on every read (1 = no binning)."""
+        return self._bin_channels
+
+    @bin_channels.setter
+    def bin_channels(self, value):
+        self._bin_channels = int(value)
+
+    @property
+    def nc(self):
+        """Number of output channels (raw nc // bin_channels)."""
+        return self._nc // self._bin_channels
+
+    @property
+    def geometry(self):
+        """Probe geometry averaged over each bin group.
+
+        When ``bin_channels == 1`` this is identical to ``geometry_full``.
+        Use ``geometry_full`` to always get the raw per-electrode positions.
+
+        Returns
+        -------
+        dict with keys 'x' and 'y', each an ndarray of shape (nc,).
+        """
+        if self._bin_channels == 1:
+            return self._geometry
+        n = self._bin_channels
+        nc_binned = self._nc // n
+        return {k: self._geometry[k][: nc_binned * n].reshape(nc_binned, n).mean(axis=1) for k in ("x", "y")}
+
+    @geometry.setter
+    def geometry(self, value):
+        # spikeglx.Reader base class assigns self.geometry = None in some paths;
+        # route those writes to the private backing store.
+        self._geometry = value
+
+    @property
+    def geometry_full(self):
+        """Full per-electrode probe geometry, independent of ``bin_channels``.
+
+        Includes a ``'binned_channel_index'`` field mapping each raw channel to its
+        corresponding output channel index (``raw_channel // bin_channels``).
+
+        Returns
+        -------
+        dict with keys 'x', 'y', and 'binned_channel_index', each an ndarray of shape (nc_raw,).
+        """
+        n = self._bin_channels
+        binned_channel_index = np.arange(self._nc, dtype=np.int32) // n
+        return {**self._geometry, "binned_channel_index": binned_channel_index}
 
     @staticmethod
     def recordings(h5_file):
@@ -916,14 +993,10 @@ class LFPackReader(_spikeglx.Reader):
         return self._fs
 
     @property
-    def nc(self):
-        return self._nc
-
-    @property
     def ns(self):
         return self._ns
 
-    def read(self, nsel=slice(0, 10000), csel=slice(None), sync=True):
+    def read(self, nsel=slice(0, 10000), csel=slice(None), sync=True, bin_channels=None):
         """
         Decompress and return a sample range.
 
@@ -932,15 +1005,20 @@ class LFPackReader(_spikeglx.Reader):
         nsel : slice or int
             Sample selection (Python slice convention).
         csel : slice or array-like
-            Channel selection.
+            Channel selection applied after spatial binning.
         sync : bool
             If True returns (data, None); no sync trace in compressed files.
+        bin_channels : int or None
+            Number of adjacent channels to sum together.  ``None`` uses
+            ``self.bin_channels``.  ``csel`` indexes into the binned channels.
 
         Returns
         -------
-        data : ndarray (n_samples, n_channels), float32, volts
+        data : ndarray (n_samples, nc // bin_channels), float32, volts
         sync : None  (only when sync=True)
         """
+        if bin_channels is None:
+            bin_channels = self._bin_channels
         if not self.is_open:
             raise IOError("Reader not open; call open() first.")
 
@@ -977,13 +1055,13 @@ class LFPackReader(_spikeglx.Reader):
                 left_overlap=int(grp.attrs.get("left_overlap", 0)),
                 ns_extended=int(grp.attrs.get("ns_extended", ns_orig)),
             )
-            pieces.append(decompress(c))  # (nc, ns_chunk_i)
+            pieces.append(decompress(c, bin_channels=bin_channels))  # (nc[_binned], ns_chunk_i)
 
-        full = np.concatenate(pieces, axis=1)  # (nc, total_samples)
+        full = np.concatenate(pieces, axis=1)  # (nc[_binned], total_samples)
         start = first_sample - first_chunk * chunk
-        data = full[:, start : start + (last_sample - first_sample)]  # (nc, n_req)
+        data = full[:, start : start + (last_sample - first_sample)]  # (nc[_binned], n_req)
 
-        # Transpose to spikeglx convention (n_samples, nc)
+        # Transpose to spikeglx convention (n_samples, nc[_binned])
         data = data.T.astype(np.float32)
         if not (isinstance(csel, slice) and csel == slice(None)):
             data = data[:, csel]
@@ -991,3 +1069,25 @@ class LFPackReader(_spikeglx.Reader):
         if sync:
             return data, None
         return data
+
+    def read_samples(self, first_sample=0, last_sample=10000, channels=None, bin_channels=None):
+        """
+        Read and decompress a sample range with optional spatial binning.
+
+        Parameters
+        ----------
+        first_sample : int
+        last_sample : int
+        channels : slice or array-like or None
+            Channel selection applied after binning.  ``None`` selects all.
+        bin_channels : int or None
+            Number of adjacent channels to sum together.  ``None`` uses
+            ``self.bin_channels``.  Valid values: 1, 2, 4, 6, 8, 12.
+
+        Returns
+        -------
+        ndarray (n_samples, nc // bin_channels), float32, volts
+        """
+        if channels is None:
+            channels = slice(None)
+        return self.read(slice(first_sample, last_sample), channels, bin_channels=bin_channels)

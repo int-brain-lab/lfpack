@@ -85,6 +85,24 @@ class TestLfpack(unittest.TestCase):
         r_high_eps = lfpack.compress(self.data, epsilon=500.0).U_scaled.shape[1]
         self.assertGreaterEqual(r_low_eps, r_high_eps)
 
+    def test_decompress_bin_channels_shape(self):
+        """decompress(bin_channels=N) returns (nc//N, ns)."""
+        c = lfpack.compress(self.data)
+        for n in (2, 4):
+            rec = lfpack.decompress(c, bin_channels=n)
+            self.assertEqual(rec.shape, (self.nc // n, self.ns))
+            self.assertEqual(rec.dtype, np.float32)
+
+    def test_decompress_bin_channels_math(self):
+        """Binned result equals sum of adjacent channels in the full reconstruction."""
+        c = lfpack.compress(self.data, alpha=0.0)  # SVD-only for exact linearity
+        full = lfpack.decompress(c)  # (nc, ns)
+        for n in (2, 4):
+            binned = lfpack.decompress(c, bin_channels=n)  # (nc//n, ns)
+            nc_binned = self.nc // n
+            expected = full[: nc_binned * n].reshape(nc_binned, n, self.ns).sum(axis=1)
+            np.testing.assert_allclose(binned.astype(np.float64), expected.astype(np.float64), rtol=2e-5)
+
 
 class TestLFPackH5(unittest.TestCase):
     """Round-trip tests for compress_to_h5 / LFPackReader using an in-memory dummy dataset."""
@@ -266,6 +284,46 @@ class TestLFPackReaderAPI(unittest.TestCase):
         data = sr.read(slice(0, 10), sync=False)
         self.assertIsInstance(data, np.ndarray)
         self.assertEqual(data.shape, (10, self.NC))
+
+    def test_bin_channels_property_shapes(self):
+        """Instantiating with bin_channels propagates to nc, shape, geometry, and slicing."""
+        for n in (2, 4):
+            sr = lfpack.LFPackReader(self.h5, bin_channels=n)
+            self.assertEqual(sr.bin_channels, n)
+            self.assertEqual(sr.nc, self.NC // n)
+            self.assertEqual(sr.shape, (self.NS, self.NC // n))
+            self.assertEqual(sr.geometry["x"].shape, (self.NC // n,))
+            self.assertEqual(sr.geometry["y"].shape, (self.NC // n,))
+            data = sr[0 : self.NS, :]
+            self.assertEqual(data.shape, (self.NS, self.NC // n))
+
+    def test_geometry_full_always_raw(self):
+        """geometry_full returns full (nc,) arrays and binned_channel_index regardless of bin_channels."""
+        sr = lfpack.LFPackReader(self.h5, bin_channels=4)
+        gf = sr.geometry_full
+        self.assertEqual(gf["x"].shape, (self.NC,))
+        self.assertEqual(gf["y"].shape, (self.NC,))
+        self.assertEqual(gf["binned_channel_index"].shape, (self.NC,))
+        # channel i maps to bin i // 4
+        np.testing.assert_array_equal(gf["binned_channel_index"], np.arange(self.NC) // 4)
+
+    def test_read_samples_bin_channels_shape(self):
+        """read_samples(bin_channels=N) returns (ns, nc//N)."""
+        sr = lfpack.LFPackReader(self.h5)
+        for n in (2, 4):
+            data, _ = sr.read_samples(0, self.NS, bin_channels=n)
+            self.assertEqual(data.shape, (self.NS, self.NC // n))
+            self.assertEqual(data.dtype, np.float32)
+
+    def test_read_samples_bin_channels_math(self):
+        """Binned read equals column-sum of adjacent channels in the unbinned read."""
+        sr = lfpack.LFPackReader(self.h5)
+        full, _ = sr.read_samples(0, self.NS)  # (ns, nc)
+        for n in (2, 4):
+            binned, _ = sr.read_samples(0, self.NS, bin_channels=n)  # (ns, nc//n)
+            nc_binned = self.NC // n
+            expected = full[:, : nc_binned * n].reshape(self.NS, nc_binned, n).sum(axis=2)
+            np.testing.assert_allclose(binned.astype(np.float64), expected.astype(np.float64), rtol=1e-4)
 
     def test_scales_missing_recording_raises(self):
         with self.assertRaises(KeyError):

@@ -20,5 +20,29 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Run tests
-        run: uv run pytest tests/ -v
+      - name: Run tests with coverage
+        run: uv run pytest tests/ -v --cov=lfpack --cov-report=term-missing --cov-report=json
+
+      - name: Post coverage to step summary
+        if: always()
+        run: |
+          python -c "
+          import json, pathlib, os
+          data = json.loads(pathlib.Path('coverage.json').read_text())
+          t = data['totals']
+          lines = [
+            '## Coverage report',
+            f\"| Statements | Covered | Missed | % |\",
+            f\"|---|---|---|---|\",
+            f\"| {t['num_statements']} | {t['covered_lines']} | {t['missing_lines']} | **{t['percent_covered']:.1f}%** |\",
+            '',
+            '| File | Stmts | Miss | Cover |',
+            '|---|---|---|---|',
+          ]
+          for path, info in data['files'].items():
+            s = info['summary']
+            lines.append(f\"| \`{path}\` | {s['num_statements']} | {s['missing_lines']} | {s['percent_covered']:.1f}% |\")
+          summary = os.environ.get('GITHUB_STEP_SUMMARY', '/dev/null')
+          with open(summary, 'a') as f:
+            f.write('\n'.join(lines) + '\n')
+          "

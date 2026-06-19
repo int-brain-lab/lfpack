@@ -206,5 +206,107 @@ class TestLFPackH5(unittest.TestCase):
             lfpack.LFPackReader(h5, recording="does_not_exist")
 
 
+class TestLFPackReaderAPI(unittest.TestCase):
+    """Edge-case paths in LFPackReader and compress_to_h5 not covered by the round-trip tests."""
+
+    NC = 32
+    NS = 512
+    CHUNK = 256
+    OVERLAP = 32
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        data = _synthetic_lfp(nc=self.NC, ns=self.NS)
+        self.npy = self.tmp_path / "ck.npy"
+        np.save(self.npy, data.T.astype(np.float32))
+        self.h = {"x": np.zeros(self.NC, dtype=np.float32), "y": np.arange(self.NC, dtype=np.float32) * 25.0}
+        self.h5 = self.tmp_path / "t.h5"
+        lfpack.compress_to_h5(
+            self.npy, self.h5, recording="r", h=self.h, chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_compress_to_h5_default_geometry(self):
+        """h=None falls back to NP1 geometry (covers the h-is-None branch)."""
+        h5 = self.tmp_path / "no_geom.h5"
+        lfpack.compress_to_h5(self.npy, h5, recording="r", chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1)
+        sr = lfpack.LFPackReader(h5)
+        self.assertEqual(sr.nc, self.NC)
+
+    def test_close_is_open_is_mtscomp(self):
+        sr = lfpack.LFPackReader(self.h5)
+        self.assertTrue(sr.is_open)
+        self.assertFalse(sr.is_mtscomp)
+        self.assertGreater(sr.fs, 0)
+        sr.close()
+        self.assertFalse(sr.is_open)
+        sr.close()  # idempotent
+
+    def test_read_raises_when_closed(self):
+        sr = lfpack.LFPackReader(self.h5)
+        sr.close()
+        with self.assertRaises(IOError):
+            sr.read(slice(0, 10))
+
+    def test_read_int_nsel(self):
+        sr = lfpack.LFPackReader(self.h5)
+        data, _ = sr.read(0)
+        self.assertEqual(data.shape, (1, self.NC))
+
+    def test_read_channel_selection(self):
+        sr = lfpack.LFPackReader(self.h5)
+        data, _ = sr.read(slice(0, 100), csel=slice(0, 4))
+        self.assertEqual(data.shape, (100, 4))
+
+    def test_read_no_sync(self):
+        sr = lfpack.LFPackReader(self.h5)
+        data = sr.read(slice(0, 10), sync=False)
+        self.assertIsInstance(data, np.ndarray)
+        self.assertEqual(data.shape, (10, self.NC))
+
+    def test_scales_missing_recording_raises(self):
+        with self.assertRaises(KeyError):
+            lfpack.LFPackReader.scales(self.h5, "no_such_recording")
+
+    def test_legacy_format(self):
+        """LFPackReader reads legacy flat layout (meta/chunks at root) and recordings() returns []."""
+        leg = self.tmp_path / "legacy.h5"
+        with h5py.File(self.h5, "r") as src, h5py.File(leg, "w") as dst:
+            src.copy("r/00/meta", dst, name="meta")
+            src.copy("r/00/chunks", dst, name="chunks")
+        self.assertEqual(lfpack.LFPackReader.recordings(leg), [])
+        sr = lfpack.LFPackReader(leg)
+        data, _ = sr.read_samples(0, self.NS)
+        self.assertEqual(data.shape, (self.NS, self.NC))
+
+
+class TestCompressPipeline(unittest.TestCase):
+    """Tests for compress_pipeline (Cadzow + SVD + WP end-to-end)."""
+
+    NC = 32
+    NS = 500
+
+    def setUp(self):
+        self.data = _synthetic_lfp(nc=self.NC, ns=self.NS)
+        self.h = {"x": np.zeros(self.NC, dtype=np.float32), "y": np.arange(self.NC, dtype=np.float32) * 25.0}
+
+    def test_compress_pipeline_shape(self):
+        reconstructed, compressed = lfpack.compress_pipeline(self.data, h=self.h)
+        self.assertEqual(reconstructed.shape, self.data.shape)
+        self.assertEqual(reconstructed.dtype, np.float32)
+
+    def test_compress_pipeline_cr(self):
+        _, compressed = lfpack.compress_pipeline(self.data, h=self.h)
+        self.assertGreater(compressed.cr_total, 1.0)
+
+    def test_compress_pipeline_default_geometry(self):
+        """h=None uses the NP1 geometry for nc channels."""
+        reconstructed, _ = lfpack.compress_pipeline(self.data)
+        self.assertEqual(reconstructed.shape, self.data.shape)
+
+
 if __name__ == "__main__":
     unittest.main()

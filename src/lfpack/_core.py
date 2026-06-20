@@ -335,6 +335,7 @@ def _cadzow_worker(job):
         niter=job["niter"],
         fmax=job["fmax"],
         nswx=job["nswx"],
+        ovx=job["ovx"],
         gap_threshold=job["gap_threshold"],
         ppca_k=job["ppca_k"],
         n_jobs=1,
@@ -355,6 +356,7 @@ def run_cadzow_checkpoint(
     niter=1,
     fmax=None,
     nswx=64,
+    ovx=32,
     gap_threshold=2.0,
     ppca_k=2.0,
     n_jobs=4,
@@ -389,6 +391,8 @@ def run_cadzow_checkpoint(
         Max frequency for Cadzow [Hz].  None → Nyquist.  Default None.
     nswx : int
         Cadzow channel-window width.  Default 64.
+    ovx : int
+        Cadzow channel-window overlap.  Default 32 (50% of nswx).
     gap_threshold : float
         Adaptive-rank gap threshold.  Default 2.0.
     ppca_k : float
@@ -438,6 +442,7 @@ def run_cadzow_checkpoint(
         niter=niter,
         fmax=fmax,
         nswx=nswx,
+        ovx=ovx,
         gap_threshold=gap_threshold,
         ppca_k=ppca_k,
     )
@@ -678,7 +683,7 @@ def compress_bin_to_h5(
         If the file already exists the decimate+Cadzow step is skipped entirely.
     cadzow_kwargs : dict or None
         Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match
-        ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx,
+        ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx, ovx,
         gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).
     channel_labels : np.ndarray or None
         Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain).

@@ -1,0 +1,20 @@
+# decompress { #lfpack.decompress }
+
+```python
+decompress(compressed, bin_channels=1)
+```
+
+Reconstruct LFP data from a compressed representation.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type          | Description                                                                                                                                                                                                                                                                         | Default    |
+|--------------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| compressed   | LFPCompressed |                                                                                                                                                                                                                                                                                     | _required_ |
+| bin_channels | int           | Number of adjacent channels to sum together (spatial binning).  ``1`` means no binning.  Must evenly divide ``nc`` or trailing channels are silently dropped.  When > 1, the full ``(nc, ns)`` array is never materialised; only the binned ``(nc // bin_channels, ns)`` result is. | `1`        |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                                                        | Description   |
+|--------|-------------------------------------------------------------|---------------|
+|        | ndarray of shape (nc // bin_channels, ns_original), float32 |               |

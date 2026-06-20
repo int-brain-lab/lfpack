@@ -1,0 +1,63 @@
+# compress_bin_to_h5 { #lfpack.compress_bin_to_h5 }
+
+```python
+compress_bin_to_h5(
+    bin_file,
+    out_h5,
+    recording=None,
+    q=10,
+    h=None,
+    cadzow_checkpoint_file=None,
+    cadzow_kwargs=None,
+    channel_labels=None,
+    epsilon=150.0,
+    alpha=28.0,
+    n_jobs=4,
+    chunk=_COMPRESS_CHUNK,
+    overlap=_COMPRESS_OVERLAP,
+    highpass_cutoff=2.0,
+    car=True,
+    fig_dir=None,
+)
+```
+
+Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
+
+Decimation uses ibldsp.voltage.resample_denoise_lfp_cbin (FIR anti-aliasing).  Cadzow
+denoising is performed inside each decimation worker when *cadzow_kwargs* is provided.
+An intermediate float32 checkpoint (.npy) is always written — either to the path given
+by *cadzow_checkpoint_file* or to a sibling temp file that is deleted after the HDF5 is
+finalised.  If the checkpoint file already exists its contents are used directly, skipping
+the expensive decimate+denoise step.
+
+Bad channels are detected automatically (via ibldsp.voltage.detect_bad_channels_cbin)
+before decimation unless *channel_labels* is supplied or the checkpoint already exists.
+Detected bad channels are interpolated by resample_denoise_lfp_cbin before SVD, which
+prevents incoherent channels from collapsing the noise-floor estimate and inflating rank.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name                   | Type                | Description                                                                                                                                                                                                                                   | Default             |
+|------------------------|---------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| bin_file               | path - like         | SpikeGLX LFP binary (.cbin or .bin).  The .meta file must be in the same directory.                                                                                                                                                           | _required_          |
+| out_h5                 | path - like         | Output HDF5 file (created or overwritten).                                                                                                                                                                                                    | _required_          |
+| recording              | str or None         | Unique key for this recording (e.g. a probe-insertion UUID).  Stored as the top-level HDF5 group; multiple recordings can coexist in one file. Defaults to the stem of bin_file when None.                                                    | `None`              |
+| q                      | int                 | Decimation factor.  Default 10 (2500 → 250 Hz).                                                                                                                                                                                               | `10`                |
+| h                      | dict or None        | Probe header with keys 'x' and 'y'.  Defaults to NP1 geometry for nc channels.                                                                                                                                                                | `None`              |
+| cadzow_checkpoint_file | path - like or None | Path for the intermediate Cadzow .npy checkpoint (ns_lf, nc) float32. If None a temporary file is written next to out_h5 and deleted afterwards. If the file already exists the decimate+Cadzow step is skipped entirely.                     | `None`              |
+| cadzow_kwargs          | dict or None        | Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx, gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).                               | `None`              |
+| channel_labels         | np.ndarray or None  | Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain). If None and the checkpoint does not exist, labels are auto-detected via ibldsp.voltage.detect_bad_channels_cbin.  Pass an array of zeros to skip detection explicitly. | `None`              |
+| epsilon                | float               | SVD threshold multiplier.  Default 150.                                                                                                                                                                                                       | `150.0`             |
+| alpha                  | float               | WP threshold multiplier.  Default 28.                                                                                                                                                                                                         | `28.0`              |
+| n_jobs                 | int                 | Parallel workers for the decimate+Cadzow stage.  Default 4.                                                                                                                                                                                   | `4`                 |
+| chunk                  | int                 | Compress chunk size in decimated samples.  Default 2048.                                                                                                                                                                                      | `_COMPRESS_CHUNK`   |
+| overlap                | int                 | SVD guard-band samples each side.  Default 128.                                                                                                                                                                                               | `_COMPRESS_OVERLAP` |
+| highpass_cutoff        | float or None       | 3rd-order Butterworth zero-phase highpass corner [Hz] applied before decimation. Default 2.0 Hz.  None disables the filter.                                                                                                                   | `2.0`               |
+| car                    | bool                | Apply median common-average reference before decimation.  Default True.                                                                                                                                                                       | `True`              |
+| fig_dir                | path - like or None | If set, a bad-channel diagnostic figure is saved to this directory after detection. Uses ibldsp.plots.show_channels_labels on a single mid-recording batch. Filename: ``bad_channels_{bin_file.stem}.png``.  Default None (no figure).        | `None`              |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type   | Description                   |
+|--------|--------|-------------------------------|
+|        | Path   | Path to the output HDF5 file. |

@@ -1,0 +1,64 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "lfpack"
+  favicon: figures/favicon.png
+  repo-url: https://github.com/int-brain-lab/lfpack
+  navbar:
+    left:
+      - text: "Tutorial"
+        file: tutorials/first-compression.qmd
+      - text: "How-To"
+        menu:
+          - text: "Binned-channel reads"
+            file: how-to/binned-reads.qmd
+          - text: "Multi-recording files"
+            file: how-to/multi-recording.qmd
+      - text: "Reference"
+        menu:
+          - text: "API"
+            file: reference/index.qmd
+          - text: "HDF5 format"
+            file: reference/hdf5-layout.qmd
+      - text: "Explanation"
+        menu:
+          - text: "Compression pipeline"
+            file: explanation/pipeline.qmd
+          - text: "Benchmark gallery"
+            file: explanation/gallery.qmd
+    right:
+      - icon: github
+        href: https://github.com/int-brain-lab/lfpack
+
+format:
+  html:
+    theme: minty
+    toc: true
+    code-copy: true
+    code-overflow: wrap
+    lightbox: true
+
+quartodoc:
+  package: lfpack
+  dir: reference
+  sidebar: reference/_sidebar.yml
+  sections:
+    - title: "Compression"
+      desc: "Compress LFP recordings to HDF5."
+      contents:
+        - compress_bin_to_h5
+        - compress_to_h5
+        - compress_pipeline
+        - compress
+        - decompress
+        - run_cadzow_checkpoint
+    - title: "Data types"
+      desc: "Core data structures."
+      contents:
+        - LFPCompressed
+    - title: "Reader"
+      desc: "Random-access decompression."
+      contents:
+        - LFPackReader

@@ -122,6 +122,9 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Quarto rendered output
+docs/_site/
+
 # mypy
 .mypy_cache/
 .dmypy.json

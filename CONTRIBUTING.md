@@ -25,13 +25,43 @@ uv run ruff check  src/ tests/   # lint
 
 The pre-commit hook installed above runs both checks automatically and blocks commits that fail.
 
+## Docstrings
+
+All public functions, classes, and methods use [NumPy/SciPy docstring format](https://numpydoc.readthedocs.io/en/latest/format.html).
+These docstrings are rendered into the API reference by [quartodoc](https://machow.github.io/quartodoc/).
+
+## Documentation
+
+The docs site lives in `docs/` and follows the [Diátaxis](https://diataxis.fr) framework:
+
+| Directory | Type | Purpose |
+|---|---|---|
+| `docs/tutorials/` | Tutorial | Guided learning paths |
+| `docs/how-to/` | How-To | Step-by-step task guides |
+| `docs/reference/` | Reference | API docs (quartodoc) + HDF5 spec |
+| `docs/explanation/` | Explanation | Concepts, design choices, benchmarks |
+
+Build the docs:
+
+```bash
+# Generate API reference pages from docstrings
+uv run quartodoc build --config docs/_quarto.yml
+
+# Render HTML (output → docs/_site/)
+quarto render docs/
+
+# Live preview with hot-reload
+quarto preview docs/
+```
+
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest                     # run all tests
+uv run pytest --cov --cov-report=term-missing   # with coverage report
 ```
 
-All existing tests must pass before opening a pull request.
+All existing tests must pass and coverage must not regress before opening a pull request.
 
 ## Versioning
 

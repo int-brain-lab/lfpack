@@ -1,0 +1,20 @@
+website:
+  sidebar:
+  - contents:
+    - reference/index.qmd
+    - contents:
+      - reference/compress_bin_to_h5.qmd
+      - reference/compress_to_h5.qmd
+      - reference/compress_pipeline.qmd
+      - reference/compress.qmd
+      - reference/decompress.qmd
+      - reference/run_cadzow_checkpoint.qmd
+      section: Compression
+    - contents:
+      - reference/LFPCompressed.qmd
+      section: Data types
+    - contents:
+      - reference/LFPackReader.qmd
+      section: Reader
+    id: reference
+  - id: dummy-sidebar

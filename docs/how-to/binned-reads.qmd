@@ -1,0 +1,59 @@
+---
+title: "How to use binned-channel reads"
+---
+
+Adjacent Neuropixels channels are spatially correlated at LFP frequencies, so full per-channel sampling may not be needed for downstream analysis.
+`LFPackReader` supports on-the-fly channel binning: neighbouring channels are summed during decompression, keeping memory use proportional to the binned channel count rather than the raw 384.
+
+A 4-channel bin reduces a 1-hour recording from 1.3 GB to 330 MB, and because binning is applied chunkwise the full array is never materialised in memory.
+
+## Set binning at construction
+
+```python
+from lfpack import LFPackReader
+
+sr = LFPackReader("recording.lf.h5", bin_channels=4)
+
+traces = sr[0:1000]   # shape (1000, nc // 4)
+print(sr.nc)          # nc // 4 output channels
+```
+
+`bin_channels=4` sums every group of 4 adjacent channels.
+`sr.nc` returns the binned channel count (`raw_nc // bin_channels`).
+
+## Geometry after binning
+
+```python
+sr = LFPackReader("recording.lf.h5", bin_channels=4)
+
+# y positions averaged over each group of 4
+print(sr.geometry["y"])
+
+# original per-electrode y positions
+print(sr.geometry_full["y"])
+
+# (nc_raw,) — maps each raw channel to its output bin index
+print(sr.geometry_full["binned_channel_index"])
+```
+
+`sr.geometry` reflects the binned positions (mean of each group).
+`sr.geometry_full` always returns the full per-electrode geometry regardless of binning, plus a
+`binned_channel_index` field that maps every raw channel to its corresponding output channel (`raw_channel // bin_channels`).
+
+
+## Override binning per read
+
+```python
+sr = LFPackReader("recording.lf.h5")          # default: no binning
+
+traces_raw    = sr.read_samples(0, 1000)                         # (1000, nc)
+traces_binned = sr.read_samples(0, 1000, bin_channels=8)         # (1000, nc // 8)
+```
+
+The `bin_channels` argument to `read` / `read_samples` overrides the instance default for that call only.
+
+## Notes
+
+- Binning is applied after decompression; it does not affect what is stored on disk.
+- `bin_channels` must divide `nc` evenly.
+- The default `bin_channels=1` returns unmodified decompressed data.

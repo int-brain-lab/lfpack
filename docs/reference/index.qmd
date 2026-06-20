@@ -1,0 +1,30 @@
+# Function reference {.doc .doc-index}
+
+## Compression
+
+Compress LFP recordings to HDF5.
+
+| | |
+| --- | --- |
+| [compress_bin_to_h5](compress_bin_to_h5.qmd#lfpack.compress_bin_to_h5) | Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5. |
+| [compress_to_h5](compress_to_h5.qmd#lfpack.compress_to_h5) | Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks. |
+| [compress_pipeline](compress_pipeline.qmd#lfpack.compress_pipeline) | Full LFP compression pipeline: Cadzow denoise → SVD-adapt → WP threshold. |
+| [compress](compress.qmd#lfpack.compress) | Compress an LFP snippet using adaptive SVD and wavelet-packet thresholding. |
+| [decompress](decompress.qmd#lfpack.decompress) | Reconstruct LFP data from a compressed representation. |
+| [run_cadzow_checkpoint](run_cadzow_checkpoint.qmd#lfpack.run_cadzow_checkpoint) | Cadzow-denoise a decimated LFP array in overlapping chunks and save a contiguous checkpoint. |
+
+## Data types
+
+Core data structures.
+
+| | |
+| --- | --- |
+| [LFPCompressed](LFPCompressed.qmd#lfpack.LFPCompressed) | Compressed representation of an (nc, ns) LFP matrix. |
+
+## Reader
+
+Random-access decompression.
+
+| | |
+| --- | --- |
+| [LFPackReader](LFPackReader.qmd#lfpack.LFPackReader) | Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files. |

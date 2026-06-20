@@ -1,0 +1,75 @@
+---
+title: "HDF5 format specification"
+---
+
+This page documents the on-disk layout of `.h5` files written by lfpack.
+
+## Layout (current — multi-recording, pyramidal)
+
+```
+<file>.h5
+└─ <recording>/           # one group per recording (e.g. "probe00")
+   └─ <scale_2digit>/     # zero-padded scale index (e.g. "00", "01")
+      ├─ meta             # scalar/array attributes (see below)
+      └─ chunks/
+         ├─ 0/            # first compressed chunk
+         │   ├─ U_scaled       float32  (nc, r)     shuffle+gzip
+         │   ├─ vh_indices     int32    (n_kept,)    gzip
+         │   └─ vh_values      float32  (n_kept,)    gzip
+         ├─ 1/
+         ...
+```
+
+## `meta` attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `nc` | int | Number of channels |
+| `ns_total` | int | Total number of samples |
+| `fs` | float | Sample rate (Hz) |
+| `epsilon` | float | SVD noise-floor threshold |
+| `alpha` | float | Wavelet-packet threshold multiplier |
+| `compress_chunk` | int | Samples per compressed chunk |
+| `geometry_x` | float32 array | Channel x positions (µm) |
+| `geometry_y` | float32 array | Channel y positions (µm) |
+| `sglx_meta` | JSON string | Original SpikeGLX metadata |
+
+## Chunk datasets
+
+Each chunk group (`chunks/<i>/`) stores three datasets.
+
+### `U_scaled`
+
+Shape `(nc, r)`, dtype `float32`.
+Stores `U[:, :r] * sv[:r]` — the left singular vectors scaled by their singular values.
+Written with the HDF5 `shuffle` filter followed by `gzip` (level 4).
+The shuffle filter reorders bytes by significance (all MSBs first, then the next byte, …), improving gzip compression on dense float32 data by ~10–20%.
+
+### `vh_indices` and `vh_values`
+
+Shape `(n_kept,)`, dtype `int32` and `float32` respectively.
+Store the sparse non-zero wavelet-packet coefficients of the right singular vectors.
+The dense array can be reconstructed as:
+
+```python
+Vh_hat = np.zeros(vh_shape, dtype=np.float32)
+Vh_hat.flat[vh_indices] = vh_values
+```
+
+`vh_shape` is stored as an attribute on the chunk group.
+Storing indices + values rather than a dense zeroed array and relying on gzip to compress zero runs gives a smaller file and faster reads.
+
+## Chunk group attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `r` | int | SVD rank for this chunk |
+| `ns` | int | Number of samples in this chunk |
+| `ns_extended` | int | Samples including guard bands |
+| `vh_shape` | 2-tuple | Shape of the dense Vh_hat array |
+
+## Legacy flat layout
+
+Files written by lfpack ≤ 0.0.x use a flat layout with `meta` and `chunks/` at the root (no recording/scale hierarchy).
+`LFPackReader` detects this automatically (by checking for a `meta` key at root level) and remains fully readable.
+Writing this format is no longer supported.

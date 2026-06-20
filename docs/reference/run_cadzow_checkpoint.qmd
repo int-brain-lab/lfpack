@@ -1,0 +1,49 @@
+# run_cadzow_checkpoint { #lfpack.run_cadzow_checkpoint }
+
+```python
+run_cadzow_checkpoint(
+    data,
+    out_npy,
+    h=None,
+    fs=250.0,
+    chunk=_CADZOW_CHUNK,
+    halo=_CADZOW_HALO,
+    rank=5,
+    niter=1,
+    fmax=None,
+    nswx=64,
+    gap_threshold=2.0,
+    ppca_k=2.0,
+    n_jobs=4,
+)
+```
+
+Cadzow-denoise a decimated LFP array in overlapping chunks and save a contiguous checkpoint.
+
+Each chunk of `chunk` samples is read with a `halo`-sample context on each side,
+denoised, then only the central `chunk` samples are written.  The output .npy
+contains no guard bands and can be memory-mapped directly.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name          | Type                       | Description                                                                                                                                                                                  | Default         |
+|---------------|----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| data          | (ndarray(ns, nc), float32) | Decimated LFP at `fs` Hz, time-first so time slices are contiguous on disk.                                                                                                                  | _required_      |
+| out_npy       | path - like                | Output .npy file path.  Shape (ns, nc), float32, time-first.                                                                                                                                 | _required_      |
+| h             | dict or None               | Probe header with keys 'x' and 'y'.  Defaults to NP1 geometry for nc channels.                                                                                                               | `None`          |
+| fs            | float                      | Sampling rate [Hz].  Default 250.                                                                                                                                                            | `250.0`         |
+| chunk         | int                        | Written chunk size (samples).  chunk + 2*halo must be FFT-optimal. Default 640 → processed window = 640 + 2×64 = 768 = 3 × 256.                                                              | `_CADZOW_CHUNK` |
+| halo          | int                        | Context halo each side (samples).  Default 64.                                                                                                                                               | `_CADZOW_HALO`  |
+| rank          | int                        | Cadzow SVD rank.  Default 5.                                                                                                                                                                 | `5`             |
+| niter         | int                        | Number of Cadzow iterations.  Default 1.                                                                                                                                                     | `1`             |
+| fmax          | float or None              | Max frequency for Cadzow [Hz].  None → Nyquist.  Default None.                                                                                                                               | `None`          |
+| nswx          | int                        | Cadzow channel-window width.  Default 64.                                                                                                                                                    | `64`            |
+| gap_threshold | float                      | Adaptive-rank gap threshold.  Default 2.0.                                                                                                                                                   | `2.0`           |
+| ppca_k        | float                      | PPCA outlier-suppression threshold.  Default 2.0.                                                                                                                                            | `2.0`           |
+| n_jobs        | int                        | Number of chunks processed in parallel via ProcessPoolExecutor.  Each worker subprocess calls cadzow_denoiser with n_jobs=1 and writes its result directly to the output memmap.  Default 4. | `4`             |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                                                 | Description   |
+|--------|------------------------------------------------------|---------------|
+|        | ndarray (ns, nc), float32 — also written to out_npy. |               |

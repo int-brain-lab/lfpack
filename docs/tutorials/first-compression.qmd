@@ -1,0 +1,79 @@
+---
+title: "Compress your first LFP recording"
+bibliography: ../references.bib
+---
+
+This tutorial walks you through the complete lfpack workflow: installing the package, compressing a raw Neuropixels LFP binary, and reading the result back.
+By the end you will have a working compressed file and know how to access any time window from it.
+
+## Prerequisites
+
+- Python ≥ 3.10
+- A raw Neuropixels LFP binary (`.lf.cbin` or `.lf.bin`) with its accompanying `.meta` file
+
+## 1. Install
+
+```bash
+pip install lfpack
+```
+
+Or with uv:
+
+```bash
+uv add lfpack
+```
+
+## 2. Compress a recording
+
+```python
+from lfpack import compress_bin_to_h5
+
+compress_bin_to_h5("my_recording.lf.bin", "my_recording.lf.h5")
+```
+
+`compress_bin_to_h5` runs the full 8-stage pipeline (bad-channel detection → dephasing → highpass → interpolation → CAR → decimation → Cadzow → SVD+WP) and writes the result to an HDF5 file.
+For a 60-minute 384-channel NP1 recording the output is typically 15–25 MB.
+
+## 3. Read traces
+
+```python
+from lfpack import LFPackReader
+
+sr = LFPackReader("my_recording.lf.h5")
+
+print(f"Duration:    {sr.ns / sr.fs:.1f} s")
+print(f"Channels:    {sr.nc}")
+print(f"Sample rate: {sr.fs} Hz")
+
+# Read the first 4 seconds (float32, volts)
+traces = sr[0 : int(4 * sr.fs)]   # shape (1000, nc)
+```
+
+`LFPackReader` is a drop-in replacement for `spikeglx.Reader`.
+Slicing decompresses only the requested chunks on demand — you never load the whole recording into memory.
+
+## 4. Inspect channel geometry
+
+```python
+print(sr.geometry["x"])   # probe x positions (µm)
+print(sr.geometry["y"])   # probe y positions (µm)
+```
+
+## 5. Plot a snippet
+
+Use `viewephys` [@viewephys] for an interactive probe view with gain control and panning:
+
+```python
+from viewephys.gui import viewephys
+
+traces = sr[0:500]   # (500, nc), time-first — viewephys expects (nc, time)
+ev = viewephys(traces.T, fs=sr.fs, title="LFP decompressed")
+```
+
+`viewephys` opens a Qt window.  Use `Ctrl+Z` / `Ctrl+A` to decrease/increase gain.
+
+## What's next?
+
+- [How to use binned-channel reads](../how-to/binned-reads.qmd) — reduce spatial resolution at read time
+- [Explanation: Compression pipeline](../explanation/pipeline.qmd) — understand what each stage does
+- [API reference](../reference/index.qmd) — full parameter documentation

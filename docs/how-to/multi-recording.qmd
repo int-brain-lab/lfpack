@@ -1,0 +1,58 @@
+---
+title: "How to work with multi-recording HDF5 files"
+---
+
+A single HDF5 file can contain multiple recordings (e.g. two probes from the same session) and multiple pyramidal scales of each recording.
+This guide shows how to list, select, and read from them.
+
+## Inspect an HDF5 file
+
+```python
+from lfpack import LFPackReader
+
+# List recordings in the file
+recordings = LFPackReader.recordings("multi.lf.h5")
+print(recordings)   # e.g. ['probe00', 'probe01']
+
+# List available scales for a recording
+scales = LFPackReader.scales("multi.lf.h5", "probe00")
+print(scales)       # e.g. [0, 1, 2]  (0 = full resolution)
+```
+
+## Open a specific recording
+
+```python
+sr = LFPackReader("multi.lf.h5", recording="probe00")
+traces = sr[0:1000]
+```
+
+If the file contains only one recording, `recording` can be omitted and it is selected automatically.
+
+## Open a downsampled scale
+
+```python
+# Scale 1 is spatially downsampled (half the channels)
+sr = LFPackReader("multi.lf.h5", recording="probe00", scale=1)
+```
+
+Scale 0 is always the full-resolution recording.
+Higher scale indices correspond to progressively coarser spatial representations.
+
+## Write a multi-recording file
+
+Use `compress_to_h5` (not `compress_bin_to_h5`) and call it once per recording, passing the same output path each time:
+
+```python
+from lfpack import compress_to_h5
+import numpy as np
+
+# First probe
+data_a = np.load("probe00_lfp.npy")   # (nc, ns) float32
+compress_to_h5(data_a, fs=250.0, h5_file="session.lf.h5", recording="probe00")
+
+# Second probe — appended to the same file
+data_b = np.load("probe01_lfp.npy")
+compress_to_h5(data_b, fs=250.0, h5_file="session.lf.h5", recording="probe01")
+```
+
+See [`compress_to_h5`](../reference/compress_to_h5.qmd) for the full parameter list.

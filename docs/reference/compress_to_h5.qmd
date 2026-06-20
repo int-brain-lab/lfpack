@@ -1,0 +1,56 @@
+# compress_to_h5 { #lfpack.compress_to_h5 }
+
+```python
+compress_to_h5(
+    cadzow_npy,
+    out_h5,
+    recording,
+    scale=0,
+    sglx_meta=None,
+    h=None,
+    chunk=_COMPRESS_CHUNK,
+    overlap=_COMPRESS_OVERLAP,
+    epsilon=150.0,
+    alpha=28.0,
+    fs=250.0,
+    n_jobs=4,
+)
+```
+
+Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
+
+Each written chunk of `chunk` samples is extended by `overlap` samples on each side
+before SVD + wavelet-packet compression.  Only the central `chunk` columns of Vh_hat
+are stored, eliminating wavelet-reconstruction boundary artefacts.  Decompressed
+chunks are concatenated without overlap during reading.
+
+## HDF5 layout {.doc-section .doc-section-hdf5-layout}
+
+/<recording>/<scale_str>/meta        attrs: nc, ns_total, fs, compress_chunk,
+                                            compress_overlap, epsilon, alpha,
+                                            sglx_meta (JSON), geometry_x, geometry_y
+/<recording>/<scale_str>/chunks/<i>/ datasets: U_scaled (nc, r),
+                                               vh_indices (n_kept,) int32,
+                                               vh_values (n_kept,) float32
+                                     attrs: ns_original, ns_extended, left_overlap,
+                                            vh_shape, epsilon, alpha, cr_svd, cr_wp,
+                                            cr_total, rmse
+
+where <scale_str> = f'{scale:02d}', e.g. '00', '01', …  Multiple recordings and/or
+scales can coexist in a single file; merging two files is a plain group copy.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name       | Type         | Description                                                                                                                                 | Default             |
+|------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| cadzow_npy | path - like  | Path to the (ns, nc) float32 Cadzow checkpoint (time-first).                                                                                | _required_          |
+| out_h5     | path - like  | Output HDF5 file (created or overwritten).                                                                                                  | _required_          |
+| recording  | str          | Unique key for this recording (e.g. a probe-insertion UUID).  Top-level HDF5 group name; allows multiple recordings to coexist in one file. | _required_          |
+| scale      | int          | Resolution level (zero-padded to two digits in the path).  0 = base resolution. Default 0.                                                  | `0`                 |
+| sglx_meta  | dict or None | Original spikeglx metadata (sr.meta).  Stored verbatim as JSON.                                                                             | `None`              |
+| h          | dict or None | Probe header.  Defaults to NP1 geometry for nc channels.                                                                                    | `None`              |
+| chunk      | int          | Written chunk size (samples).  Default 2048 = 2^11.                                                                                         | `_COMPRESS_CHUNK`   |
+| overlap    | int          | Guard-band samples each side.  Default 128.                                                                                                 | `_COMPRESS_OVERLAP` |
+| epsilon    | float        | SVD threshold multiplier.  Default 150.                                                                                                     | `150.0`             |
+| alpha      | float        | WP threshold multiplier.  Default 28.                                                                                                       | `28.0`              |
+| fs         | float        | Sampling rate [Hz] written into metadata.  Default 250.                                                                                     | `250.0`             |

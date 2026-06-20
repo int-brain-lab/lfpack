@@ -1,0 +1,21 @@
+# compress { #lfpack.compress }
+
+```python
+compress(data, epsilon=150.0, alpha=28.0)
+```
+
+Compress an LFP snippet using adaptive SVD and wavelet-packet thresholding.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name    | Type                      | Description                                                                                                                     | Default    |
+|---------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------|------------|
+| data    | ndarray of shape (nc, ns) | LFP data matrix, float32 or float64.  Rows are channels, columns are time.                                                      | _required_ |
+| epsilon | float                     | SVD threshold multiplier.  rank = #{k : sv[k] > epsilon × sigma_noise}. Default 150.                                            | `150.0`    |
+| alpha   | float                     | WP threshold multiplier per component: tau_k = alpha × sigma_noise / sv[k]. Set to 0 to skip wavelet-packet stage.  Default 28. | `28.0`     |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type          | Description   |
+|--------|---------------|---------------|
+|        | LFPCompressed |               |

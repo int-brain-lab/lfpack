@@ -1,0 +1,33 @@
+# LFPCompressed { #lfpack.LFPCompressed }
+
+```python
+LFPCompressed(
+    U_scaled,
+    Vh_hat,
+    ns_original,
+    epsilon,
+    alpha,
+    cr_svd,
+    cr_wp,
+    cr_total,
+    left_overlap=0,
+    ns_extended=0,
+)
+```
+
+Compressed representation of an (nc, ns) LFP matrix.
+
+## Attributes {.doc-section .doc-section-attributes}
+
+| Name         | Type                              | Description                                                                      |
+|--------------|-----------------------------------|----------------------------------------------------------------------------------|
+| U_scaled     | (ndarray(nc, r), float32)         | Left singular vectors scaled by their singular values: U[:, :r] * sv[:r].        |
+| Vh_hat       | (ndarray(r, n_wp_slots), float32) | WP-domain leaf-node coefficients (alpha > 0) or time-domain rows (alpha == 0).   |
+| ns_original  | int                               | Output time samples after trimming guard bands.                                  |
+| epsilon      | float                             | SVD threshold multiplier used during compression.                                |
+| alpha        | float                             | WP threshold multiplier used during compression.                                 |
+| cr_svd       | float                             | SVD-only compression ratio nc*ns / (r*(nc+ns)) — what CR would be without WP.    |
+| cr_wp        | float                             | WP compression ratio r*ns / n_kept (1.0 when alpha=0).                           |
+| cr_total     | float                             | True compression ratio nc*ns / (r*nc + n_kept): original floats / stored floats. |
+| left_overlap | int                               | Guard-band samples to trim at left after inverse WP (0 when no overlap context). |
+| ns_extended  | int                               | Total time samples the WP coefficients represent (0 → use ns_original).          |

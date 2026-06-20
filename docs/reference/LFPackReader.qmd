@@ -1,0 +1,152 @@
+# LFPackReader { #lfpack.LFPackReader }
+
+```python
+LFPackReader(h5_file, recording=None, scale=0, bin_channels=1)
+```
+
+Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files.
+
+Chunks are decompressed on demand.  No sync trace is available; read() with
+sync=True returns None as the second element.  Data is returned in volts (float32)
+in the same (n_samples, n_channels) convention as spikeglx.Reader.
+
+The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
+A file may contain multiple recordings and/or multiple scale levels.  When a file
+contains exactly one recording the key is auto-detected; otherwise pass recording=.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type        | Description                                                                                                                                                                                                                                                                             | Default    |
+|--------------|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| h5_file      | path - like | HDF5 archive produced by compress_to_h5.                                                                                                                                                                                                                                                | _required_ |
+| recording    | str or None | Recording key (top-level group name).  Auto-detected when the file contains exactly one recording; raises ValueError for multi-recording files.                                                                                                                                         | `None`     |
+| scale        | int         | Resolution level to open.  0 = base (full LFP rate).  Default 0.                                                                                                                                                                                                                        | `0`        |
+| bin_channels | int         | Number of adjacent channels to sum together on every read.  ``1`` (default) means no binning.  When set, ``nc``, ``shape``, and ``geometry`` all reflect the binned dimension, and slicing (``sr[0:2500, :]``) returns ``(n_samples, nc // bin_channels)`` without any extra arguments. | `1`        |
+
+## Examples {.doc-section .doc-section-examples}
+
+```python
+>>> sr = LFPackReader('lf_compressed.h5')
+>>> sr[0:2500, :]                              # (2500, nc)
+>>> sr4 = LFPackReader('lf_compressed.h5', bin_channels=4)
+>>> sr4[0:2500, :]                             # (2500, nc // 4)
+>>> sr4.nc                                     # nc // 4
+>>> sr4.shape                                  # (ns, nc // 4)
+>>> sr4.geometry['y'].shape                    # (nc // 4,)
+```
+
+## Attributes
+
+| Name | Description |
+| --- | --- |
+| [bin_channels](#lfpack.LFPackReader.bin_channels) | Number of adjacent channels summed on every read (1 = no binning). |
+| [geometry](#lfpack.LFPackReader.geometry) | Probe geometry averaged over each bin group. |
+| [geometry_full](#lfpack.LFPackReader.geometry_full) | Full per-electrode probe geometry, independent of ``bin_channels``. |
+| [nc](#lfpack.LFPackReader.nc) | Number of output channels (raw nc // bin_channels). |
+
+## Methods
+
+| Name | Description |
+| --- | --- |
+| [read](#lfpack.LFPackReader.read) | Decompress and return a sample range. |
+| [read_samples](#lfpack.LFPackReader.read_samples) | Read and decompress a sample range with optional spatial binning. |
+| [recordings](#lfpack.LFPackReader.recordings) | List recording keys at the root of an H5 file written by compress_to_h5. |
+| [scales](#lfpack.LFPackReader.scales) | List scale indices available for a recording. |
+
+### read { #lfpack.LFPackReader.read }
+
+```python
+LFPackReader.read(
+    nsel=slice(0, 10000),
+    csel=slice(None),
+    sync=True,
+    bin_channels=None,
+)
+```
+
+Decompress and return a sample range.
+
+#### Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type                  | Description                                                                                                                    | Default           |
+|--------------|-----------------------|--------------------------------------------------------------------------------------------------------------------------------|-------------------|
+| nsel         | slice or int          | Sample selection (Python slice convention).                                                                                    | `slice(0, 10000)` |
+| csel         | slice or array - like | Channel selection applied after spatial binning.                                                                               | `slice(None)`     |
+| sync         | bool                  | If True returns (data, None); no sync trace in compressed files.                                                               | `True`            |
+| bin_channels | int or None           | Number of adjacent channels to sum together.  ``None`` uses ``self.bin_channels``.  ``csel`` indexes into the binned channels. | `None`            |
+
+#### Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                                                     | Description   |
+|--------|----------------------------------------------------------|---------------|
+| data   | (ndarray(n_samples, nc // bin_channels), float32, volts) |               |
+| sync   | None  (only when sync=True)                              |               |
+
+### read_samples { #lfpack.LFPackReader.read_samples }
+
+```python
+LFPackReader.read_samples(
+    first_sample=0,
+    last_sample=10000,
+    channels=None,
+    bin_channels=None,
+)
+```
+
+Read and decompress a sample range with optional spatial binning.
+
+#### Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type                          | Description                                                                                                          | Default   |
+|--------------|-------------------------------|----------------------------------------------------------------------------------------------------------------------|-----------|
+| first_sample | int                           |                                                                                                                      | `0`       |
+| last_sample  | int                           |                                                                                                                      | `10000`   |
+| channels     | slice or array - like or None | Channel selection applied after binning.  ``None`` selects all.                                                      | `None`    |
+| bin_channels | int or None                   | Number of adjacent channels to sum together.  ``None`` uses ``self.bin_channels``.  Valid values: 1, 2, 4, 6, 8, 12. | `None`    |
+
+#### Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                                                     | Description   |
+|--------|----------------------------------------------------------|---------------|
+|        | (ndarray(n_samples, nc // bin_channels), float32, volts) |               |
+
+### recordings { #lfpack.LFPackReader.recordings }
+
+```python
+LFPackReader.recordings(h5_file)
+```
+
+List recording keys at the root of an H5 file written by compress_to_h5.
+
+#### Parameters {.doc-section .doc-section-parameters}
+
+| Name    | Type        | Description   | Default    |
+|---------|-------------|---------------|------------|
+| h5_file | path - like |               | _required_ |
+
+#### Returns {.doc-section .doc-section-returns}
+
+| Name   | Type        | Description   |
+|--------|-------------|---------------|
+|        | list of str |               |
+
+### scales { #lfpack.LFPackReader.scales }
+
+```python
+LFPackReader.scales(h5_file, recording)
+```
+
+List scale indices available for a recording.
+
+#### Parameters {.doc-section .doc-section-parameters}
+
+| Name      | Type        | Description   | Default    |
+|-----------|-------------|---------------|------------|
+| h5_file   | path - like |               | _required_ |
+| recording | str         |               | _required_ |
+
+#### Returns {.doc-section .doc-section-returns}
+
+| Name   | Type        | Description   |
+|--------|-------------|---------------|
+|        | list of int |               |

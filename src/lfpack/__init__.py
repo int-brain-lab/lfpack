@@ -12,5 +12,6 @@ from lfpack._core import (  # noqa: F401
     compress_pipeline,
     compress_to_h5,
     decompress,
+    merge_h5,
     run_cadzow_checkpoint,
 )

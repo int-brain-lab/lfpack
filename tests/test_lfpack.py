@@ -341,6 +341,127 @@ class TestLFPackReaderAPI(unittest.TestCase):
         self.assertEqual(data.shape, (self.NS, self.NC))
 
 
+class TestMergeH5(unittest.TestCase):
+    """Tests for merge_h5: multi-recording aggregation without re-compression."""
+
+    NC = 32
+    NS = 512
+    CHUNK = 256
+    OVERLAP = 32
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        data = _synthetic_lfp(nc=self.NC, ns=self.NS)
+        npy = self.tmp_path / "ck.npy"
+        np.save(npy, data.T.astype(np.float32))
+        self.h = {"x": np.zeros(self.NC, dtype=np.float32), "y": np.arange(self.NC, dtype=np.float32) * 25.0}
+        self.npy = npy
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_h5(self, recording):
+        """Compress the shared npy into a fresh single-recording H5 and return its path."""
+        h5 = self.tmp_path / f"{recording}.h5"
+        lfpack.compress_to_h5(
+            self.npy, h5, recording=recording, h=self.h, chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1
+        )
+        return h5
+
+    def test_recordings_in_merged_file(self):
+        """merge_h5 produces a file with exactly the expected recording names."""
+        h5a = self._make_h5("rec_a")
+        h5b = self._make_h5("rec_b")
+        merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a, h5b], merged)
+        self.assertEqual(sorted(lfpack.LFPackReader.recordings(merged)), ["rec_a", "rec_b"])
+
+    def test_hierarchy_preserved(self):
+        """The full /<rec>/00/meta and /<rec>/00/chunks/<i>/ structure survives the copy."""
+        h5a = self._make_h5("rec_a")
+        merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a], merged)
+        with h5py.File(merged, "r") as f:
+            # top-level group and scale sub-group
+            self.assertIn("rec_a", f)
+            self.assertIn("00", f["rec_a"])
+            # meta attrs
+            meta = f["rec_a/00/meta"]
+            for attr in ("nc", "ns_total", "fs", "compress_chunk", "compress_overlap"):
+                self.assertIn(attr, meta.attrs)
+            self.assertEqual(int(meta.attrs["nc"]), self.NC)
+            self.assertEqual(int(meta.attrs["ns_total"]), self.NS)
+            # at least one chunk with the expected datasets
+            chunks = f["rec_a/00/chunks"]
+            self.assertGreater(len(chunks), 0)
+            chunk0 = chunks["0"]
+            for ds in ("U_scaled", "vh_indices", "vh_values"):
+                self.assertIn(ds, chunk0)
+            # chunk attrs
+            for attr in ("ns_original", "vh_shape", "cr_total", "rmse"):
+                self.assertIn(attr, chunk0.attrs)
+
+    def test_merged_file_is_readable(self):
+        """LFPackReader can decompress data from a merged file."""
+        h5a = self._make_h5("rec_a")
+        h5b = self._make_h5("rec_b")
+        merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a, h5b], merged)
+        for rec in ("rec_a", "rec_b"):
+            sr = lfpack.LFPackReader(merged, recording=rec)
+            data, _ = sr.read_samples(0, self.NS)
+            self.assertEqual(data.shape, (self.NS, self.NC))
+
+    def test_duplicate_recording_name_raises(self):
+        """Two source files that map to the same recording name raise ValueError."""
+        h5a = self._make_h5("rec_a")
+        h5b = self._make_h5("rec_b")
+        merged = self.tmp_path / "merged.h5"
+        with self.assertRaises(ValueError):
+            lfpack.merge_h5([h5a, h5b], merged, recording_map={h5b: "rec_a"})
+
+    def test_duplicate_within_src_files_raises(self):
+        """Two source files with the same internal key raise ValueError (no recording_map needed)."""
+        h5a = self._make_h5("same_key")
+        h5b = self.tmp_path / "same_key_2.h5"
+        lfpack.compress_to_h5(
+            self.npy, h5b, recording="same_key", h=self.h, chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1
+        )
+        merged = self.tmp_path / "merged.h5"
+        with self.assertRaises(ValueError):
+            lfpack.merge_h5([h5a, h5b], merged)
+
+    def test_recording_map_renames_key(self):
+        """recording_map lets the caller override the recording name in the merged file."""
+        h5a = self._make_h5("original_name")
+        merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a], merged, recording_map={h5a: "renamed"})
+        self.assertEqual(lfpack.LFPackReader.recordings(merged), ["renamed"])
+        # original name must not appear
+        with h5py.File(merged, "r") as f:
+            self.assertNotIn("original_name", f)
+
+    def test_multi_file_raises_on_multi_recording_source(self):
+        """A source file with more than one top-level group raises ValueError."""
+        h5a = self._make_h5("rec_a")
+        h5b = self._make_h5("rec_b")
+        # build a file that already has two recordings (like a previously merged file)
+        multi = self.tmp_path / "multi.h5"
+        lfpack.merge_h5([h5a, h5b], multi)
+        merged = self.tmp_path / "merged2.h5"
+        with self.assertRaises(ValueError):
+            lfpack.merge_h5([multi], merged)
+
+    def test_returns_resolved_path(self):
+        """merge_h5 returns the resolved Path to the output file."""
+        h5a = self._make_h5("rec_a")
+        merged = self.tmp_path / "merged.h5"
+        result = lfpack.merge_h5([h5a], merged)
+        self.assertIsInstance(result, Path)
+        self.assertTrue(result.exists())
+
+
 class TestCompressPipeline(unittest.TestCase):
     """Tests for compress_pipeline (Cadzow + SVD + WP end-to-end)."""
 

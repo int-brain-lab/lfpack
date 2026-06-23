@@ -630,6 +630,73 @@ def compress_to_h5(
     return out_h5
 
 
+def merge_h5(src_files, dst_h5, recording_map=None):
+    """
+    Merge multiple per-recording HDF5 files into one multi-recording archive.
+
+    Each source file must contain exactly one top-level recording group (the
+    layout produced by ``compress_to_h5`` and ``compress_bin_to_h5``).  The
+    entire group is copied verbatim — no re-compression is performed.
+
+    Parameters
+    ----------
+    src_files : sequence of path-like
+        Source HDF5 files, one recording per file.
+    dst_h5 : path-like
+        Output multi-recording HDF5 file (always created fresh).
+    recording_map : dict mapping path-like to str, optional
+        Override the recording name for specific source files.  Keys are
+        matched by resolved absolute path.  Files absent from the map retain
+        their original top-level group name.
+
+    Returns
+    -------
+    Path
+        Resolved path to *dst_h5*.
+
+    Raises
+    ------
+    ValueError
+        If a source file contains more than one top-level group, or if two
+        source files would resolve to the same recording name.
+    """
+    import h5py
+
+    resolved_map = {Path(k).resolve(): v for k, v in (recording_map or {}).items()}
+
+    # Build the plan before touching dst_h5 so errors surface early.
+    plan = []
+    for src in src_files:
+        src_path = Path(src).resolve()
+        with h5py.File(src_path, "r") as f:
+            keys = list(f.keys())
+        if len(keys) != 1:
+            raise ValueError(
+                f"{src_path.name} has {len(keys)} top-level groups {keys}; "
+                "merge_h5 requires exactly one recording per source file"
+            )
+        recording = resolved_map.get(src_path, keys[0])
+        plan.append((src_path, recording, keys[0]))
+
+    seen: set = set()
+    dupes: list = []
+    for _, recording, _ in plan:
+        if recording in seen:
+            dupes.append(recording)
+        else:
+            seen.add(recording)
+    if dupes:
+        raise ValueError(f"Duplicate recording name(s): {sorted(set(dupes))}")
+
+    dst_h5 = Path(dst_h5)
+    with h5py.File(dst_h5, "w") as dst:
+        for src_path, recording, src_key in plan:
+            with h5py.File(src_path, "r") as src:
+                src.copy(src_key, dst, name=recording)
+
+    return dst_h5.resolve()
+
+
 def compress_bin_to_h5(
     bin_file,
     out_h5,

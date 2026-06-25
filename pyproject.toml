@@ -10,7 +10,7 @@ dependencies = [
     "ibl-neuropixel",
     "numpy",
     "scipy",
-    "h5py",
+    "h5py>=3.0",
     "PyWavelets",
 ]
 

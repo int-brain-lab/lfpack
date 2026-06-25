@@ -68,6 +68,20 @@ Storing indices + values rather than a dense zeroed array and relying on gzip to
 | `ns_extended` | int | Samples including guard bands |
 | `vh_shape` | 2-tuple | Shape of the dense Vh_hat array |
 
+## HDF5 version compatibility
+
+All files are written with `libver=('earliest', 'v110')`, which pins the format to
+HDF5 1.10 features (released 2017).  Any HDF5 ≥ 1.10 — and therefore any h5py ≥ 3.0 —
+can read lfpack files.
+
+::: {.callout-warning}
+Do not change this to `libver='latest'`.  That setting resolves to whatever the
+installed library considers current at write time, so files written on different
+machines end up in different formats.  Reading them elsewhere then fails with
+cryptic low-level errors (`bad version number for layout message`) with no
+indication that a version mismatch is the cause.
+:::
+
 ## Legacy flat layout
 
 Files written by lfpack ≤ 0.0.x use a flat layout with `meta` and `chunks/` at the root (no recording/scale hierarchy).

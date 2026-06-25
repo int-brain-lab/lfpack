@@ -540,6 +540,12 @@ def compress_to_h5(
     where <scale_str> = f'{scale:02d}', e.g. '00', '01', …  Multiple recordings and/or
     scales can coexist in a single file; merging two files is a plain group copy.
 
+    Files are written with ``libver=('earliest', 'v110')``, which pins the HDF5
+    format to features available since HDF5 1.10 (2017).  Do **not** change this
+    to ``libver='latest'``; that setting is a moving target resolved at write time
+    by the installed library and produces format features that differ between HDF5
+    versions, causing silent corruption when files are copied across environments.
+
     Parameters
     ----------
     cadzow_npy : path-like
@@ -591,7 +597,7 @@ def compress_to_h5(
         jobs.append((str(cadzow_npy), i0_r, i1_r, n_w, i0_w - i0_r, epsilon, alpha))
 
     root = f"{recording}/{scale:02d}"
-    with h5py.File(out_h5, "w", libver="latest") as f:
+    with h5py.File(out_h5, "w", libver=("earliest", "v110")) as f:
         mg = f.create_group(f"{root}/meta")
         mg.attrs["nc"] = nc
         mg.attrs["ns_total"] = ns
@@ -690,7 +696,7 @@ def merge_h5(src_files, dst_h5, recording_map=None):
         raise ValueError(f"Duplicate recording name(s): {sorted(set(dupes))}")
 
     dst_h5 = Path(dst_h5)
-    with h5py.File(dst_h5, "w") as dst:
+    with h5py.File(dst_h5, "w", libver=("earliest", "v110")) as dst:
         for src_path, recording, src_key in tqdm(plan, desc=dst_h5.stem, unit="PID"):
             with h5py.File(src_path, "r") as src:
                 src.copy(src_key, dst, name=recording)

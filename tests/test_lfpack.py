@@ -153,6 +153,15 @@ class TestLFPackH5(unittest.TestCase):
         self.assertEqual(data.shape, (self.NS, self.NC))
         self.assertEqual(data.dtype, np.float32)
 
+    def test_compress_to_h5_libver(self):
+        """compress_to_h5 must not use libver='latest' (moving target — breaks cross-version reads)."""
+        h5 = self.tmp_path / "single.h5"
+        self._write(h5, "rec_a")
+        with open(h5, "rb") as fh:
+            fh.seek(8)
+            superblock_version = fh.read(1)[0]
+        self.assertLess(superblock_version, 3, "compress_to_h5 must not use libver='latest' (moving target)")
+
     def test_roundtrip_fidelity(self):
         h5 = self.tmp_path / "single.h5"
         self._write(h5, "rec_a")
@@ -398,9 +407,19 @@ class TestMergeH5(unittest.TestCase):
             chunk0 = chunks["0"]
             for ds in ("U_scaled", "vh_indices", "vh_values"):
                 self.assertIn(ds, chunk0)
-            # chunk attrs
             for attr in ("ns_original", "vh_shape", "cr_total", "rmse"):
                 self.assertIn(attr, chunk0.attrs)
+
+    def test_merge_h5_libver(self):
+        """Merged file must not use libver='latest' (moving target — breaks cross-version reads)."""
+        h5a = self._make_h5("rec_a")
+        merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a], merged)
+        # libver=('earliest', 'v110') produces superblock v0; libver='latest' produces v3 which is a moving target
+        with open(merged, "rb") as fh:
+            fh.seek(8)
+            superblock_version = fh.read(1)[0]
+        self.assertLess(superblock_version, 3, "merge_h5 must not use libver='latest' (moving target)")
 
     def test_merged_file_is_readable(self):
         """LFPackReader can decompress data from a merged file."""

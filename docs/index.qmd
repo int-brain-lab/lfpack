@@ -16,6 +16,7 @@ subtitle: "Lossy LFP codec for Neuropixels recordings"
 | [Reference: API](reference/index.qmd) | Full API reference |
 | [Reference: HDF5 format](reference/hdf5-layout.qmd) | File format specification |
 | [Explanation: Pipeline](explanation/pipeline.qmd) | Design rationale for each pipeline stage |
+| [Explanation: Benchmark gallery](explanation/gallery.qmd) | Compression benchmarks across 11 IBL recordings |
 
 
 

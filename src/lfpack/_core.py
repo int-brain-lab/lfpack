@@ -38,6 +38,7 @@ import pywt
 import scipy.signal  # noqa: F401
 import spikeglx as _spikeglx
 from ibldsp import cadzow as _cadzow
+from tqdm import tqdm
 
 _WP_WAVELET = "db4"
 _WP_MAXLEVEL = 5
@@ -690,7 +691,7 @@ def merge_h5(src_files, dst_h5, recording_map=None):
 
     dst_h5 = Path(dst_h5)
     with h5py.File(dst_h5, "w") as dst:
-        for src_path, recording, src_key in plan:
+        for src_path, recording, src_key in tqdm(plan, desc=dst_h5.stem, unit="PID"):
             with h5py.File(src_path, "r") as src:
                 src.copy(src_key, dst, name=recording)
 

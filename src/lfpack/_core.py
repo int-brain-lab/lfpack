@@ -42,6 +42,11 @@ from tqdm import tqdm
 
 _WP_WAVELET = "db4"
 _WP_MAXLEVEL = 5
+# HDF5 format version used for all files written by lfpack.
+# ("earliest", "v110") produces files readable by any HDF5 >= 1.10 (2017).
+# lfpack only uses gzip+shuffle datasets, groups, and scalar/string attributes —
+# all available since HDF5 1.8 — so v110 is a safe, stable ceiling.
+_H5_LIBVER = ("earliest", "v110")
 
 
 @dataclasses.dataclass
@@ -540,11 +545,10 @@ def compress_to_h5(
     where <scale_str> = f'{scale:02d}', e.g. '00', '01', …  Multiple recordings and/or
     scales can coexist in a single file; merging two files is a plain group copy.
 
-    Files are written with ``libver=('earliest', 'v110')``, which pins the HDF5
-    format to features available since HDF5 1.10 (2017).  Do **not** change this
-    to ``libver='latest'``; that setting is a moving target resolved at write time
-    by the installed library and produces format features that differ between HDF5
-    versions, causing silent corruption when files are copied across environments.
+    Files are written with the module-level ``_H5_LIBVER`` constant (currently
+    ``("earliest", "v110")``), which pins the HDF5 format to features available
+    since HDF5 1.10 (2017) and makes the output readable by any modern HDF5
+    installation without version negotiation.
 
     Parameters
     ----------
@@ -597,7 +601,7 @@ def compress_to_h5(
         jobs.append((str(cadzow_npy), i0_r, i1_r, n_w, i0_w - i0_r, epsilon, alpha))
 
     root = f"{recording}/{scale:02d}"
-    with h5py.File(out_h5, "w", libver=("earliest", "v110")) as f:
+    with h5py.File(out_h5, "w", libver=_H5_LIBVER) as f:
         mg = f.create_group(f"{root}/meta")
         mg.attrs["nc"] = nc
         mg.attrs["ns_total"] = ns
@@ -635,6 +639,34 @@ def compress_to_h5(
 
     print(f"Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}")
     return out_h5
+
+
+def _transcopy_group(src_group, dst_group):
+    """Recursively copy an HDF5 group by reading and re-writing each dataset.
+
+    Unlike h5py's built-in copy(), this transcodes every dataset through NumPy,
+    so the destination format is fully controlled by how dst_group's file was
+    opened — independent of the source file's HDF5 version.
+    """
+    import h5py
+
+    for key, val in src_group.attrs.items():
+        dst_group.attrs[key] = val
+    for name, item in src_group.items():
+        if isinstance(item, h5py.Group):
+            _transcopy_group(item, dst_group.require_group(name))
+        else:
+            kw = {}
+            if item.chunks:
+                kw["chunks"] = item.chunks
+            if item.compression:
+                kw["compression"] = item.compression
+                kw["compression_opts"] = item.compression_opts
+            if item.shuffle:
+                kw["shuffle"] = item.shuffle
+            ds = dst_group.create_dataset(name, data=item[()], **kw)
+            for key, val in item.attrs.items():
+                ds.attrs[key] = val
 
 
 def merge_h5(src_files, dst_h5, recording_map=None):
@@ -696,10 +728,10 @@ def merge_h5(src_files, dst_h5, recording_map=None):
         raise ValueError(f"Duplicate recording name(s): {sorted(set(dupes))}")
 
     dst_h5 = Path(dst_h5)
-    with h5py.File(dst_h5, "w", libver=("earliest", "v110")) as dst:
+    with h5py.File(dst_h5, "w", libver=_H5_LIBVER) as dst:
         for src_path, recording, src_key in tqdm(plan, desc=dst_h5.stem, unit="PID"):
             with h5py.File(src_path, "r") as src:
-                src.copy(src_key, dst, name=recording)
+                _transcopy_group(src[src_key], dst.require_group(recording))
 
     return dst_h5.resolve()
 

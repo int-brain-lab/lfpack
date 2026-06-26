@@ -657,7 +657,7 @@ def _transcopy_group(src_group, dst_group):
             _transcopy_group(item, dst_group.require_group(name))
         else:
             kw = {}
-            if item.chunks:
+            if item.chunks and all(c <= s for c, s in zip(item.chunks, item.shape)):
                 kw["chunks"] = item.chunks
             if item.compression:
                 kw["compression"] = item.compression

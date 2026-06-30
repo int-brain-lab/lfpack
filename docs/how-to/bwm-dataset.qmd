@@ -2,19 +2,23 @@
 title: "How to access the IBL Brain-Wide Map LFP dataset"
 ---
 
-The IBL Brain-Wide Map (BWM) LFP dataset is distributed as two multi-recording HDF5 files —
-one standard tier and one aggressive-compression tier — covering all BWM probes.
+The IBL Brain-Wide Map (BWM) LFP dataset is distributed as a 16GB `.h5` file
+containing 699 individual recordings of 384 channels each.
 
 
-## Dataset overview
+::: {.callout-important}
+## Before you start
 
-| File | Tier | Typical RMSE | Size |
-|------|------|--------------|------|
-| `lf_compressed_all_bwm.h5` | standard | < 25 µV | ~14 GB |
-| `lf_compressed_aggressive_all_bwm.h5` | aggressive | higher | ~7 GB |
+- **Align with trial events via `sr.times`** — each recording stores a sync-corrected
+  session clock; always use `sr.times` rather than a manual `np.arange / sr.fs` when
+  matching LFP samples to spike times or trial events.
+  See [Session-clock times](#session-clock-times).
 
-Both files share the same recording identifiers.
-Use the standard tier for analysis; the aggressive tier for lightweight exploration.
+- **Use binned reads for brainwide sweeps** — looping over all 699 recordings at full
+  384-channel resolution is memory-intensive. Pass `bin_channels=4` to reduce each
+  recording to 96 spatial bins with acceptable loss of depth coverage.
+  See [Binned-channel reads](#binned-channel-reads).
+:::
 
 ## Visualise with viewephys
 
@@ -104,6 +108,28 @@ print(f"Shape:       {traces.shape}")
 
 `LFPackReader` is a drop-in for `spikeglx.Reader`.
 Slicing decompresses only the requested chunks — the full file is never loaded into memory.
+
+## Binned-channel reads
+
+Adjacent channels are spatially correlated at LFP frequencies.
+Passing `bin_channels` sums neighbouring channels during decompression, reducing
+memory use. A factor of 4 takes 384 channels down to 96 while keeping depth resolution useful for LFP.
+
+```python
+from lfpack import LFPackReader
+
+file_lfpack = "lf_compressed_all_bwm.h5"
+pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
+
+sr = LFPackReader(file_lfpack, recording=pid, bin_channels=4)
+
+traces = sr[:, :]      # (ns, 96) — full recording, 96 spatial bins
+print(sr.nc)           # 96
+print(sr.geometry["y"])           # mean depth of each 4-channel group
+print(sr.geometry_full['binned_channel_index'])  # spatial mapping of the original 384 channels into the 96 binned ones
+```
+
+![Full-resolution (384 ch) vs binned ×4 (96 ch) LFP density for the same 4-second window](../figures/lfp_binned_comparison.jpg){fig-alt="Side-by-side LFP density plots at full and 4x binned channel resolution" .lightbox}
 
 ## Session-clock times
 

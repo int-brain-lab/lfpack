@@ -1,5 +1,8 @@
 # lfpack — LFP codec for Neuropixels recordings
 
+> **IBL Brain-Wide Map LFP dataset** — 699 recordings, 384 channels, session-clock aligned.
+> [How to access →](https://int-brain-lab.github.io/lfpack/how-to/bwm-dataset.html)
+
 <p align="center">
   <img src="docs/figures/logo.png" alt="lfpack logo" width="300"/>
 </p>

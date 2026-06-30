@@ -349,6 +349,62 @@ class TestLFPackReaderAPI(unittest.TestCase):
         data, _ = sr.read_samples(0, self.NS)
         self.assertEqual(data.shape, (self.NS, self.NC))
 
+    def _annotate_h5(self):
+        """Write brain-location attrs to self.h5 and return the injected arrays."""
+        ml = np.linspace(-3e-3, 3e-3, self.NC, dtype=np.float32)
+        ap = np.zeros(self.NC, dtype=np.float32)
+        dv = np.linspace(-5e-3, 0, self.NC, dtype=np.float32)
+        # atlas_id: four groups of NC//4 channels each get a distinct id
+        n = 4
+        atlas_id = np.repeat(np.arange(self.NC // n, dtype=np.int32), n)
+        acronym = [f"reg{i // n}" for i in range(self.NC)]
+        with h5py.File(self.h5, "a") as f:
+            meta = f["r/00/meta"]
+            meta.attrs["ml"] = ml
+            meta.attrs["ap"] = ap
+            meta.attrs["dv"] = dv
+            meta.attrs["atlas_id"] = atlas_id
+            meta.attrs["acronym"] = acronym
+        return ml, ap, dv, atlas_id, acronym
+
+    def test_channels_no_annotation(self):
+        """channels / channels_full work without brain-location attrs (optional fields)."""
+        for prop in ("channels", "channels_full"):
+            ch = getattr(lfpack.LFPackReader(self.h5), prop)
+            self.assertEqual(ch["lateral_um"].shape, (self.NC,))
+            self.assertEqual(ch["axial_um"].shape, (self.NC,))
+            self.assertNotIn("x", ch)
+            self.assertNotIn("atlas_id", ch)
+
+    def test_channels_full_roundtrip(self):
+        """channels_full returns raw (nc,) arrays regardless of bin_channels."""
+        sr = lfpack.LFPackReader(self.h5)
+        sr.close()
+        ml, ap, dv, atlas_id, acronym = self._annotate_h5()
+        for bin_ch in (1, 4):
+            ch = lfpack.LFPackReader(self.h5, bin_channels=bin_ch).channels_full
+            np.testing.assert_array_almost_equal(ch["x"], ml)
+            np.testing.assert_array_almost_equal(ch["z"], dv)
+            self.assertEqual(ch["atlas_id"].shape, (self.NC,))
+            self.assertEqual(ch["acronym"], acronym)
+
+    def test_channels_binned_aggregation(self):
+        """channels aggregates float fields by mean and categorical fields by mode."""
+        sr = lfpack.LFPackReader(self.h5)
+        sr.close()
+        ml, ap, dv, atlas_id, acronym = self._annotate_h5()
+        n = 4
+        sr_b = lfpack.LFPackReader(self.h5, bin_channels=n)
+        ch = sr_b.channels
+        nc_b = self.NC // n
+        # float fields averaged
+        self.assertEqual(ch["lateral_um"].shape, (nc_b,))
+        np.testing.assert_array_almost_equal(ch["x"], ml.reshape(nc_b, n).mean(axis=1))
+        # categorical fields: mode per bin (each group has a single atlas_id)
+        self.assertEqual(ch["atlas_id"].shape, (nc_b,))
+        np.testing.assert_array_equal(ch["atlas_id"], np.arange(nc_b, dtype=np.int32))
+        self.assertEqual(ch["acronym"], [f"reg{i}" for i in range(nc_b)])
+
     def test_fs_without_sync_returns_nominal(self):
         """fs falls back to the nominal rate stored in meta when no sync data."""
         sr = lfpack.LFPackReader(self.h5)

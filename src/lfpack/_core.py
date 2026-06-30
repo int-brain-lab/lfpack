@@ -522,6 +522,7 @@ def compress_to_h5(
     fs=250.0,
     t0_sync=None,
     fs_sync=None,
+    channels=None,
     n_jobs=4,
 ):
     """
@@ -578,6 +579,12 @@ def compress_to_h5(
         WP threshold multiplier.  Default 28.
     fs : float
         Sampling rate [Hz] written into metadata.  Default 250.
+    channels : dict or None
+        Optional per-channel brain location annotations.  Accepted keys (all
+        optional): ``x`` (ML, metres), ``y`` (AP, metres), ``z`` (DV, metres),
+        ``atlas_id`` (int32 array), ``acronym`` (list of str).  Matches the dict
+        returned by ``LFPackReader.channels_full``.  Written only to the ``00``
+        scale; ignored when ``scale != 0``.
     """
     import h5py
 
@@ -617,6 +624,15 @@ def compress_to_h5(
         mg.attrs["geometry_y"] = h["y"].astype(np.float32)
         mg.attrs["t0_sync"] = float(t0_sync) if t0_sync is not None else np.nan
         mg.attrs["fs_sync"] = float(fs_sync) if fs_sync is not None else np.nan
+        if channels is not None and scale == 0:
+            _ibl_to_h5 = {"x": "ml", "y": "ap", "z": "dv"}
+            for ibl_key, h5_key in _ibl_to_h5.items():
+                if ibl_key in channels:
+                    mg.attrs[h5_key] = np.asarray(channels[ibl_key], dtype=np.float32)
+            if "atlas_id" in channels:
+                mg.attrs["atlas_id"] = np.asarray(channels["atlas_id"], dtype=np.int32)
+            if "acronym" in channels:
+                mg.attrs["acronym"] = list(channels["acronym"])
 
         cg = f.create_group(f"{root}/chunks")
         from joblib import Parallel, delayed
@@ -910,6 +926,12 @@ def compress_bin_to_h5(
     return out_h5
 
 
+def _mode1d(arr):
+    """Most common value in a 1-D integer array (first occurrence wins on tie)."""
+    vals, counts = np.unique(arr, return_counts=True)
+    return vals[np.argmax(counts)]
+
+
 class LFPackReader(_spikeglx.Reader):
     """
     Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files.
@@ -1051,6 +1073,81 @@ class LFPackReader(_spikeglx.Reader):
         n = self._bin_channels
         binned_channel_index = np.arange(self._nc, dtype=np.int32) // n
         return {**self._geometry, "binned_channel_index": binned_channel_index}
+
+    @property
+    def channels_full(self):
+        """Full per-electrode channel info, independent of ``bin_channels``.
+
+        Probe shank coordinates are always present.  Brain location fields are
+        included only when written by the channel-annotation pipeline; older files
+        return a dict without those keys.  Always reads from scale ``00``.
+
+        Returns
+        -------
+        dict with keys:
+
+        - ``lateral_um`` : ndarray (nc_raw,) float32 — x position on probe shank, µm
+        - ``axial_um``   : ndarray (nc_raw,) float32 — y position on probe shank, µm
+        - ``x``          : ndarray (nc_raw,) float32 — mediolateral, metres  *(optional)*
+        - ``y``          : ndarray (nc_raw,) float32 — anteroposterior, metres *(optional)*
+        - ``z``          : ndarray (nc_raw,) float32 — dorsoventral, metres  *(optional)*
+        - ``atlas_id``   : ndarray (nc_raw,) int32   — Allen CCF structure ID *(optional)*
+        - ``acronym``    : list[str] (nc_raw,)        — brain region acronym  *(optional)*
+        """
+        import h5py
+
+        out = {
+            "lateral_um": self._geometry["x"],
+            "axial_um": self._geometry["y"],
+        }
+        if self._root is None:
+            return out
+        recording = self._root.split("/")[0]
+        _h5_to_ibl = {"ml": "x", "ap": "y", "dv": "z"}
+        with h5py.File(self._h5_file, "r") as f:
+            attrs = f[f"{recording}/00/meta"].attrs
+            for h5_key, ibl_key in _h5_to_ibl.items():
+                if h5_key in attrs:
+                    out[ibl_key] = attrs[h5_key][:].astype(np.float32)
+            if "atlas_id" in attrs:
+                out["atlas_id"] = attrs["atlas_id"][:].astype(np.int32)
+            if "acronym" in attrs:
+                raw = attrs["acronym"]
+                out["acronym"] = [v.decode() if isinstance(v, bytes) else v for v in raw]
+        return out
+
+    @property
+    def channels(self):
+        """Per-channel info aggregated over bin groups when ``bin_channels > 1``.
+
+        Float fields (lateral_um, axial_um, x, y, z) are averaged within each group.
+        Categorical fields (atlas_id, acronym) take the within-group mode.
+        Use ``channels_full`` to always get raw per-electrode data.
+
+        Returns
+        -------
+        dict — same keys as ``channels_full`` with arrays of shape (nc,).
+        """
+        full = self.channels_full
+        if self._bin_channels == 1:
+            return full
+        n = self._bin_channels
+        nc_binned = self._nc // n
+        out = {}
+        for key in ("lateral_um", "axial_um", "x", "y", "z"):
+            if key in full:
+                out[key] = full[key][: nc_binned * n].reshape(nc_binned, n).mean(axis=1)
+        if "atlas_id" in full:
+            ids = full["atlas_id"][: nc_binned * n].reshape(nc_binned, n)
+            out["atlas_id"] = np.array([_mode1d(ids[i]) for i in range(nc_binned)], dtype=np.int32)
+        if "acronym" in full and "atlas_id" in full:
+            full_ids = full["atlas_id"]
+            full_acr = full["acronym"]
+            out["acronym"] = [
+                full_acr[i * n + int(np.where(full_ids[i * n : (i + 1) * n] == out["atlas_id"][i])[0][0])]
+                for i in range(nc_binned)
+            ]
+        return out
 
     @staticmethod
     def recordings(h5_file):

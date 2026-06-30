@@ -1,6 +1,6 @@
 [project]
 name = "lfpack"
-version = "0.1.0"
+version = "0.2.0"
 description = "LFP codec — lossy compression of local-field-potential recordings via adaptive SVD and wavelet-packet thresholding"
 readme = "README.md"
 requires-python = ">=3.10"

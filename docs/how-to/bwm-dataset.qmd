@@ -25,22 +25,23 @@ containing 699 individual recordings of 384 channels each.
 ```python
 from lfpack import LFPackReader
 from viewephys.gui import viewephys
+from iblatlas.atlas import BrainRegions
 
 file_lfpack = "lf_compressed_all_bwm.h5"
 pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
 
 sr = LFPackReader(file_lfpack, recording=pid)
 traces = sr[:5000, :].T         # (nc, n_samples)
-viewephys(traces, fs=sr.fs)
+eqc = viewephys(traces, fs=sr.fs, channels=sr.channels, br=br)   # viewephys expects (nc, n_samples)
 ```
 
-![viewephys showing 20 s of decompressed LFP for one BWM probe](../figures/viewephys_screenshot.jpg){fig-alt="viewephys trace view showing 384-channel LFP data" .lightbox}
+![viewephys showing decompressed LFP for one BWM probe; the colour bar on the right indicates brain regions along the probe depth](../figures/viewephys_screenshot.jpg){fig-alt="viewephys density view showing 384-channel LFP data with brain region colour bar on the right" .lightbox}
 
 
 ## Prerequisites
 
 ```bash
-uv pip install lfpack viewephys one-api
+uv pip install lfpack viewephys one-api iblatlas
 ```
 
 ## Download

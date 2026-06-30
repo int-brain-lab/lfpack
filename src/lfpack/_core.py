@@ -1123,7 +1123,21 @@ class LFPackReader(_spikeglx.Reader):
 
     @property
     def times(self):
-        """Session-clock time in seconds for every LFP sample (ns,)."""
+        """Session-clock timestamps in seconds for every LFP sample.
+
+        Returns
+        -------
+        numpy.ndarray of float64, shape (ns,)
+            ``t0 + np.arange(ns) / fs`` where ``t0`` and ``fs`` are the
+            sync-corrected values stored during compression.  When no sync data
+            is present, ``t0`` defaults to 0 and ``fs`` to the nominal rate, so
+            ``times`` still gives a valid relative time axis.
+
+        Notes
+        -----
+        Use this array to align LFP traces with trial events or spike times that
+        share the same session clock (e.g. ``trials['stimOn_times']`` from ONE).
+        """
         t0 = self._t0_sync if self._t0_sync is not None else 0.0
         return t0 + np.arange(self._ns) / self.fs
 

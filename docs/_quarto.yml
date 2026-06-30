@@ -8,6 +8,10 @@ website:
   repo-url: https://github.com/int-brain-lab/lfpack
   navbar:
     left:
+      - text: "Datasets"
+        menu:
+          - text: "BWM LFP dataset"
+            file: how-to/bwm-dataset.qmd
       - text: "Tutorial"
         file: tutorials/first-compression.qmd
       - text: "How-To"

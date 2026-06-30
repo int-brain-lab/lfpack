@@ -520,6 +520,8 @@ def compress_to_h5(
     epsilon=150.0,
     alpha=28.0,
     fs=250.0,
+    t0_sync=None,
+    fs_sync=None,
     n_jobs=4,
 ):
     """
@@ -613,6 +615,8 @@ def compress_to_h5(
         mg.attrs["sglx_meta"] = _json.dumps(sglx_meta or {})
         mg.attrs["geometry_x"] = h["x"].astype(np.float32)
         mg.attrs["geometry_y"] = h["y"].astype(np.float32)
+        mg.attrs["t0_sync"] = float(t0_sync) if t0_sync is not None else np.nan
+        mg.attrs["fs_sync"] = float(fs_sync) if fs_sync is not None else np.nan
 
         cg = f.create_group(f"{root}/chunks")
         from joblib import Parallel, delayed
@@ -753,6 +757,8 @@ def compress_bin_to_h5(
     highpass_cutoff=2.0,
     car=True,
     fig_dir=None,
+    t0_sync=None,
+    fs_sync=None,
 ):
     """
     Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
@@ -893,6 +899,8 @@ def compress_bin_to_h5(
         epsilon=epsilon,
         alpha=alpha,
         fs=fs_lf,
+        t0_sync=t0_sync,
+        fs_sync=fs_sync,
         n_jobs=n_jobs,
     )
 
@@ -975,6 +983,10 @@ class LFPackReader(_spikeglx.Reader):
             self._nc = int(attrs["nc"])
             self._ns = int(attrs["ns_total"])
             self._fs = float(attrs["fs"])
+            _v = attrs.get("fs_sync", np.nan)
+            self._fs_sync = float(_v) if not np.isnan(_v) else None
+            _v = attrs.get("t0_sync", np.nan)
+            self._t0_sync = float(_v) if not np.isnan(_v) else None
             self._compress_chunk = int(attrs["compress_chunk"])
             self._n_chunks = len(f[chunks_path])
             self.sglx_meta = _json.loads(attrs["sglx_meta"])
@@ -1077,7 +1089,7 @@ class LFPackReader(_spikeglx.Reader):
         with h5py.File(h5_file, "r") as f:
             if recording not in f:
                 raise KeyError(f"Recording '{recording}' not found")
-            return sorted(int(k) for k in f[recording].keys())
+            return sorted(int(k) for k in f[recording].keys() if k.isdigit())
 
     def open(self):
         import h5py
@@ -1100,8 +1112,20 @@ class LFPackReader(_spikeglx.Reader):
         return False
 
     @property
+    def t0(self):
+        """Session-clock time in seconds at LFP sample 0. NaN when no sync data."""
+        return self._t0_sync if self._t0_sync is not None else np.nan
+
+    @property
     def fs(self):
-        return self._fs
+        """LFP sample rate in Hz, sync-corrected when sync data is present."""
+        return self._fs_sync if self._fs_sync is not None else self._fs
+
+    @property
+    def times(self):
+        """Session-clock time in seconds for every LFP sample (ns,)."""
+        t0 = self._t0_sync if self._t0_sync is not None else 0.0
+        return t0 + np.arange(self._ns) / self.fs
 
     @property
     def ns(self):

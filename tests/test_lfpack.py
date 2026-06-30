@@ -349,6 +349,74 @@ class TestLFPackReaderAPI(unittest.TestCase):
         data, _ = sr.read_samples(0, self.NS)
         self.assertEqual(data.shape, (self.NS, self.NC))
 
+    def test_fs_without_sync_returns_nominal(self):
+        """fs falls back to the nominal rate stored in meta when no sync data."""
+        sr = lfpack.LFPackReader(self.h5)
+        self.assertFalse(np.isnan(sr.fs))
+        self.assertGreater(sr.fs, 0)
+        self.assertEqual(sr.fs, sr._fs)
+
+    def test_t0_without_sync_returns_nan(self):
+        """t0 is NaN when the file has no sync attributes."""
+        sr = lfpack.LFPackReader(self.h5)
+        self.assertTrue(np.isnan(sr.t0))
+
+    def test_fs_and_t0_with_sync(self):
+        """fs returns fs_sync and t0 returns t0_sync when sync attrs are present."""
+        t0_ref = 123.456
+        fs_ref = 249.997
+        h5_sync = self.tmp_path / "sync.h5"
+        lfpack.compress_to_h5(
+            self.npy,
+            h5_sync,
+            recording="r",
+            h=self.h,
+            chunk=self.CHUNK,
+            overlap=self.OVERLAP,
+            n_jobs=1,
+            t0_sync=t0_ref,
+            fs_sync=fs_ref,
+        )
+        sr = lfpack.LFPackReader(h5_sync)
+        self.assertAlmostEqual(sr.fs, fs_ref, places=6)
+        self.assertAlmostEqual(sr.t0, t0_ref, places=6)
+
+    def test_times_without_sync(self):
+        """times starts at 0 and is spaced by 1/fs when no sync data."""
+        sr = lfpack.LFPackReader(self.h5)
+        t = sr.times
+        self.assertEqual(t.shape, (self.NS,))
+        self.assertAlmostEqual(float(t[0]), 0.0, places=9)
+        self.assertAlmostEqual(float(t[1] - t[0]), 1.0 / sr.fs, places=9)
+
+    def test_times_with_sync(self):
+        """times starts at t0_sync and is spaced by 1/fs_sync."""
+        t0_ref, fs_ref = 100.0, 249.5
+        h5_sync = self.tmp_path / "sync2.h5"
+        lfpack.compress_to_h5(
+            self.npy,
+            h5_sync,
+            recording="r",
+            h=self.h,
+            chunk=self.CHUNK,
+            overlap=self.OVERLAP,
+            n_jobs=1,
+            t0_sync=t0_ref,
+            fs_sync=fs_ref,
+        )
+        sr = lfpack.LFPackReader(h5_sync)
+        t = sr.times
+        self.assertEqual(t.shape, (self.NS,))
+        self.assertAlmostEqual(float(t[0]), t0_ref, places=9)
+        self.assertAlmostEqual(float(t[1] - t[0]), 1.0 / fs_ref, places=9)
+
+    def test_scales_skips_sync_group(self):
+        """scales() must not choke on non-numeric groups like a future sync group."""
+        with h5py.File(self.h5, "a") as f:
+            f.require_group("r/sync")  # inject a non-numeric sibling
+        scales = lfpack.LFPackReader.scales(self.h5, "r")
+        self.assertEqual(scales, [0])
+
 
 class TestMergeH5(unittest.TestCase):
     """Tests for merge_h5: multi-recording aggregation without re-compression."""

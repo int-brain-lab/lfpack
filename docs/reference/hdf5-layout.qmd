@@ -26,13 +26,17 @@ This page documents the on-disk layout of `.h5` files written by lfpack.
 |---|---|---|
 | `nc` | int | Number of channels |
 | `ns_total` | int | Total number of samples |
-| `fs` | float | Sample rate (Hz) |
+| `fs` | float | Nominal sample rate (Hz) |
+| `fs_sync` | float | Sync-corrected sample rate (Hz); `NaN` when not available |
+| `t0_sync` | float | Session-clock time in seconds at sample 0; `NaN` when not available |
 | `epsilon` | float | SVD noise-floor threshold |
 | `alpha` | float | Wavelet-packet threshold multiplier |
 | `compress_chunk` | int | Samples per compressed chunk |
 | `geometry_x` | float32 array | Channel x positions (µm) |
 | `geometry_y` | float32 array | Channel y positions (µm) |
 | `sglx_meta` | JSON string | Original SpikeGLX metadata |
+
+`fs_sync` and `t0_sync` are written by `compress_to_h5` when the caller supplies the corresponding keyword arguments.  `LFPackReader.fs` returns `fs_sync` when it is finite, otherwise falls back to `fs`.  `LFPackReader.t0` returns `t0_sync` when finite, otherwise `NaN`.  `LFPackReader.times` produces the full session-clock time vector using these values.
 
 ## Chunk datasets
 

@@ -58,7 +58,7 @@ Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge t
 <file>.h5
 └─ <recording>/
    └─ <scale_2digit>/
-      ├─ meta         # nc, ns_total, fs, epsilon, alpha, geometry, …
+      ├─ meta         # nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
       └─ chunks/
          └─ <i>/      # U_scaled, vh_indices, vh_values + attrs
 ```

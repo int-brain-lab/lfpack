@@ -1,8 +1,5 @@
 # lfpack — LFP codec for Neuropixels recordings
 
-> **IBL Brain-Wide Map LFP dataset** — 699 recordings, 384 channels, session-clock aligned.
-> [How to access →](https://int-brain-lab.github.io/lfpack/how-to/bwm-dataset.html)
-
 <p align="center">
   <img src="docs/figures/logo.png" alt="lfpack logo" width="300"/>
 </p>
@@ -11,9 +8,24 @@ Lossy codec for local-field-potential (LFP) recordings from Neuropixels probes.
 Achieves **>100× compression** with median RMSE < 25 µV via an 8-stage pipeline
 (bad-channel detection → dephasing → highpass → interpolation → CAR → decimation → Cadzow → adaptive SVD + wavelet-packet thresholding).
 
+> **IBL Brain-Wide Map LFP dataset** — 699 recordings, 384 channels, session-clock aligned.
+> [How to access →](https://int-brain-lab.github.io/lfpack/how-to/bwm-dataset.html)
+
 ```bash
 pip install lfpack
 ```
+
+## Visualise with viewephys
+
+[`viewephys`](https://github.com/int-brain-lab/viewephys) opens lfpack `.h5` files natively —
+`viewephys -f recording.h5` gets you a browsable, brain-region-coloured view with no
+manual decompression step:
+
+<p align="center">
+  <img src="docs/figures/viewephys_screenshot.jpg" alt="viewephys opened directly on a lfpack HDF5 file, showing brain-region-coloured LFP traces" width="700"/>
+</p>
+
+See the [BWM how-to](https://int-brain-lab.github.io/lfpack/how-to/bwm-dataset.html#visualise-with-viewephys) for details.
 
 ## Documentation
 

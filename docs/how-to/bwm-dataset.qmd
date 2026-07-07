@@ -39,6 +39,8 @@ The `.h5` extension is auto-detected and opens the lfpack-aware viewer, which:
   `iblatlas` call required
 - adds a **CSD** (current-source density) step alongside the raw signal
 
+![Recording selector (top right) and raw/CSD checkboxes after opening a multi-recording lfpack file — the dataset info panel confirms the native "Neuropixels LFP (lfpack)" backend](../figures/viewephys_recording_selector.jpg){fig-alt="Ephys Bin Viewer window showing the searchable recording dropdown and raw/CSD checkboxes for an lfpack HDF5 file" .lightbox}
+
 The same class is usable from Python:
 
 ```python

@@ -828,7 +828,7 @@ def compress_bin_to_h5(
     n_jobs=4,
     chunk=_COMPRESS_CHUNK,
     overlap=_COMPRESS_OVERLAP,
-    highpass_cutoff=2.0,
+    highpass_cutoff=0.5,
     car=True,
     fig_dir=None,
     t0_sync=None,
@@ -890,7 +890,9 @@ def compress_bin_to_h5(
         SVD guard-band samples each side.  Default 128.
     highpass_cutoff : float or None
         3rd-order Butterworth zero-phase highpass corner [Hz] applied before decimation.
-        Default 2.0 Hz.  None disables the filter.
+        Default 0.5 Hz — keeps delta/infra-slow content; benchmarking (0.5/1/2 Hz) showed
+        faithful reconstruction with negligible compression-ratio impact and no chunk-seam
+        artefact (ibldsp warmup padding scales with the corner).  None disables the filter.
     car : bool
         Apply median common-average reference before decimation.  Default True.
     fig_dir : path-like or None

@@ -907,8 +907,9 @@ def compress_bin_to_h5(
         If True (default), detect ADC-saturated samples on the raw LFP band before any
         pre-processing (which would otherwise obscure the clipping), store the saturated
         intervals as an insertion-level table in the HDF5 file, and — when Stage 1 is
-        actually run — mute the saturated stretches before the anti-alias filter so the
-        rail values do not ring into the passband.  See ``ibldsp.voltage.saturation``.
+        actually run — mute the saturated stretches on the decimated output *after* Cadzow,
+        so no pre-processing stage can leak energy back into the muted span.  See
+        ``ibldsp.voltage.saturation``.
     saturation_kwargs : dict or None
         Forwarded to ``ibldsp.voltage.saturation_cbin`` (keys: ``max_voltage``,
         ``v_per_sec``, ``proportion``, ``mute_window_samples``).  Default None uses the
@@ -956,8 +957,9 @@ def compress_bin_to_h5(
     checkpoint_existed = cadzow_npy.exists()
 
     # Saturation detection on the raw LFP band, before any pre-processing obscures the
-    # clipping.  Produces (a) a boolean .npy used to mute the saturated stretches during
-    # Stage 1, and (b) an interval table stored at insertion level in the HDF5 file.
+    # clipping.  Produces (a) a boolean .npy used to late-mute the saturated stretches on
+    # the decimated output (after Cadzow), and (b) an interval table stored at insertion
+    # level in the HDF5 file.
     # saturation_cbin runs its chunk detection in parallel over n_jobs workers.
     saturation_file = None
     saturation_intervals = None

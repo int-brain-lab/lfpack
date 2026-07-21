@@ -32,7 +32,7 @@ Nearly all code lives in `src/lfpack/_core.py` (~1000 lines). The public API is 
 
 ### Compression pipeline (`compress_bin_to_h5`)
 
-0. Saturation detection — flag ADC-clipped samples on the raw LFP band *before* any step below obscures them (`ibldsp.voltage.saturation_cbin`, parallel over `n_jobs`). Stored as an insertion-level interval table (see HDF5 layout) and used to mute the clipped stretches; toggle with `detect_saturation` / `saturation_kwargs`.
+0. Saturation detection — flag ADC-clipped samples on the raw LFP band *before* any step below obscures them (`ibldsp.voltage.saturation_cbin`, parallel over `n_jobs`). Detection is **amplitude-only** for LFP (`v_per_sec=None`): the derivative criterion is tuned for the 30 kHz AP band and mislabels normal LFP dynamics as saturation, so it is disabled here. Stored as an insertion-level interval table (see HDF5 layout) and used to mute the clipped stretches; toggle with `detect_saturation` / `saturation_kwargs`.
 1. Bad-channel detection (`ibldsp.voltage.detect_bad_channels_cbin`) — labels saved to the scale-`00` `meta` as a `labels` int8 attr; read via `LFPackReader.channels`/`channels_full` under the `labels` key.
 2. Dephasing — sample-shift correction (NP1 only, via `ibldsp.fourier.fshift`)
 3. Highpass filter — 0.5 Hz zero-phase 3rd-order Butterworth (keeps delta/infra-slow; ibldsp warmup padding scales with the corner)

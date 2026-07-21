@@ -965,6 +965,7 @@ def compress_bin_to_h5(
         sat_kwargs = dict(saturation_kwargs or {})
         sat_mute_window = int(sat_kwargs.get("mute_window_samples", 7))
         max_voltage = sat_kwargs.get("max_voltage", sr.range_volts[: sr.nc - sr.nsync])
+        v_per_sec = sat_kwargs.get("v_per_sec", None)
         print("Detecting saturation …")
         saturation_file = out_h5.with_suffix(".saturation_tmp.npy")
         sat_pqt = saturation_cbin(
@@ -972,7 +973,7 @@ def compress_bin_to_h5(
             file_saturation=saturation_file,
             n_jobs=n_jobs,
             max_voltage=max_voltage,
-            v_per_sec=sat_kwargs.get("v_per_sec", 1e-8),
+            v_per_sec=v_per_sec,
             proportion=sat_kwargs.get("proportion", 0.2),
             mute_window_samples=sat_mute_window,
         )
@@ -987,7 +988,7 @@ def compress_bin_to_h5(
             "ns_total": int(sr.ns),
             "n_saturated_samples": n_saturated,
             "saturated_fraction": float(n_saturated / sr.ns) if sr.ns else 0.0,
-            "v_per_sec": float(sat_kwargs.get("v_per_sec", 1e-8)),
+            "v_per_sec": float(v_per_sec) if v_per_sec is not None else float("nan"),
             "proportion": float(sat_kwargs.get("proportion", 0.2)),
             "mute_window_samples": sat_mute_window,
             "muted": bool(not checkpoint_existed),

@@ -264,16 +264,20 @@ def decompress(compressed: LFPCompressed, bin_channels: int = 1) -> np.ndarray:
         Vh_time_ext = _reconstruct_vh_from_wp(compressed.Vh_hat, ns_ext, r)
         Vh_time = Vh_time_ext[:, lo : lo + ns]
 
-    if bin_channels > 1:
-        # Sum U_scaled rows in groups before the matrix multiply so the result
-        # is (nc_binned, ns) rather than (nc, ns) — no large intermediate.
-        nc = compressed.U_scaled.shape[0]
-        nc_binned = nc // bin_channels
-        U = compressed.U_scaled[: nc_binned * bin_channels].astype(np.float64)
-        U_binned = U.reshape(nc_binned, bin_channels, r).sum(axis=1)
-        x_hat = U_binned @ Vh_time
-    else:
-        x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
+    # numpy's SIMD matmul can raise spurious divide/overflow/invalid FPE flags on finite
+    # inputs (it evaluates padding lanes); silence them here. nan_to_num below remains the
+    # genuine guard for any truly non-finite value.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        if bin_channels > 1:
+            # Sum U_scaled rows in groups before the matrix multiply so the result
+            # is (nc_binned, ns) rather than (nc, ns) — no large intermediate.
+            nc = compressed.U_scaled.shape[0]
+            nc_binned = nc // bin_channels
+            U = compressed.U_scaled[: nc_binned * bin_channels].astype(np.float64)
+            U_binned = U.reshape(nc_binned, bin_channels, r).sum(axis=1)
+            x_hat = U_binned @ Vh_time
+        else:
+            x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
     return np.nan_to_num(x_hat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 

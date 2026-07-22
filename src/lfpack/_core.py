@@ -110,6 +110,7 @@ def compress(
     data: np.ndarray,
     epsilon: float = 150.0,
     alpha: float = 28.0,
+    floor_k: int = 64,
 ) -> LFPCompressed:
     """
     Compress an LFP snippet using adaptive SVD and wavelet-packet thresholding.
@@ -124,10 +125,29 @@ def compress(
     alpha : float
         WP threshold multiplier per component: tau_k = alpha × sigma_noise / sv[k].
         Set to 0 to skip wavelet-packet stage.  Default 28.
+    floor_k : int
+        Survival floor on the dominant mode: the top retained row (``k == 0``)
+        keeps at least its ``floor_k`` largest-magnitude WP coefficients.  This
+        guarantees the reconstruction is never identically zero.  Without it,
+        low-SNR chunks (``sv[0] / sigma_noise`` below ~``alpha / max|coeff|``,
+        empirically ~140) have every coefficient thresholded and decompress to
+        exact zero — silently destroying real low-amplitude LFP.  High-SNR
+        recordings are unaffected: their dominant row keeps far more than
+        ``floor_k`` coefficients, so the floor never triggers and the output is
+        bit-for-bit identical to ``floor_k = 0``.  Set to 0 to disable.
+        Default 64 (kills the zeroing on affected recordings while leaving the
+        benchmark set unchanged).
 
     Returns
     -------
     LFPCompressed
+
+    Notes
+    -----
+    The floor never resurrects saturation-muted spans: an all-zero input gives
+    ``sv = 0`` so ``U_scaled = 0`` and the output is exactly zero whatever ``floor_k``
+    is.  Zero output over a muted span is correct; the floor only targets the
+    pathological all-zero from over-thresholding genuine low-amplitude LFP.
     """
     nc, ns = data.shape
     x = data.astype(np.float64)
@@ -149,13 +169,22 @@ def compress(
             tau_k = alpha * sigma_noise / (sv[k] + 1e-40)
             wp = pywt.WaveletPacket(data=Vh[k], wavelet=_WP_WAVELET, maxlevel=_WP_MAXLEVEL)
             nodes = wp.get_level(_WP_MAXLEVEL, "natural")
-            offset = 0
-            for node in nodes:
-                mask = np.abs(node.data) >= tau_k
-                n_kept += int(mask.sum())
-                node_len = len(node.data)
-                Vh_hat[k, offset : offset + node_len] = node.data * mask
-                offset += node_len
+            # Concatenate the leaf nodes in natural order so the survival floor can
+            # pick the row's largest coefficients across all nodes; the resulting flat
+            # layout is identical to node-by-node offset writes and to what
+            # _reconstruct_vh_from_wp reads back.
+            coeffs = np.concatenate([node.data for node in nodes])
+            mask = np.abs(coeffs) >= tau_k
+            # Survival floor: force-keep the floor_k largest coefficients of the
+            # dominant mode so the chunk can never be thresholded to all-zero.  Only
+            # k == 0 is floored: weaker modes may still vanish (good for CR), and the
+            # dominant row of a healthy chunk already keeps far more than floor_k, so
+            # this leaves high-SNR recordings bit-for-bit unchanged.
+            if floor_k > 0 and k == 0 and mask.sum() < floor_k:
+                keep = np.argpartition(np.abs(coeffs), -floor_k)[-floor_k:]
+                mask[keep] = True
+            n_kept += int(mask.sum())
+            Vh_hat[k, : coeffs.size] = coeffs * mask
 
     # cr_wp: how much WP thresholding compresses the Vh rows (1.0 when alpha=0)
     cr_wp = float(r * ns) / max(n_kept, 1)

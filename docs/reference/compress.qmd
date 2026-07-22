@@ -1,21 +1,29 @@
 # compress { #lfpack.compress }
 
 ```python
-compress(data, epsilon=150.0, alpha=28.0)
+compress(data, epsilon=150.0, alpha=28.0, floor_k=64)
 ```
 
 Compress an LFP snippet using adaptive SVD and wavelet-packet thresholding.
 
 ## Parameters {.doc-section .doc-section-parameters}
 
-| Name    | Type                      | Description                                                                                                                     | Default    |
-|---------|---------------------------|---------------------------------------------------------------------------------------------------------------------------------|------------|
-| data    | ndarray of shape (nc, ns) | LFP data matrix, float32 or float64.  Rows are channels, columns are time.                                                      | _required_ |
-| epsilon | float                     | SVD threshold multiplier.  rank = #{k : sv[k] > epsilon × sigma_noise}. Default 150.                                            | `150.0`    |
-| alpha   | float                     | WP threshold multiplier per component: tau_k = alpha × sigma_noise / sv[k]. Set to 0 to skip wavelet-packet stage.  Default 28. | `28.0`     |
+| Name    | Type                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Default    |
+|---------|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| data    | ndarray of shape (nc, ns) | LFP data matrix, float32 or float64.  Rows are channels, columns are time.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | _required_ |
+| epsilon | float                     | SVD threshold multiplier.  rank = #{k : sv[k] > epsilon × sigma_noise}. Default 150.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `150.0`    |
+| alpha   | float                     | WP threshold multiplier per component: tau_k = alpha × sigma_noise / sv[k]. Set to 0 to skip wavelet-packet stage.  Default 28.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `28.0`     |
+| floor_k | int                       | Survival floor on the dominant mode: the top retained row (``k == 0``) keeps at least its ``floor_k`` largest-magnitude WP coefficients.  This guarantees the reconstruction is never identically zero.  Without it, low-SNR chunks (``sv[0] / sigma_noise`` below ~``alpha / max\|coeff\|``, empirically ~140) have every coefficient thresholded and decompress to exact zero — silently destroying real low-amplitude LFP.  High-SNR recordings are unaffected: their dominant row keeps far more than ``floor_k`` coefficients, so the floor never triggers and the output is bit-for-bit identical to ``floor_k = 0``.  Set to 0 to disable. Default 64 (kills the zeroing on affected recordings while leaving the benchmark set unchanged). | `64`       |
 
 ## Returns {.doc-section .doc-section-returns}
 
 | Name   | Type          | Description   |
 |--------|---------------|---------------|
 |        | LFPCompressed |               |
+
+## Notes {.doc-section .doc-section-notes}
+
+The floor never resurrects saturation-muted spans: an all-zero input gives
+``sv = 0`` so ``U_scaled = 0`` and the output is exactly zero whatever ``floor_k``
+is.  Zero output over a muted span is correct; the floor only targets the
+pathological all-zero from over-thresholding genuine low-amplitude LFP.

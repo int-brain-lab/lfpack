@@ -46,6 +46,8 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | [geometry](#lfpack.LFPackReader.geometry) | Probe geometry averaged over each bin group. |
 | [geometry_full](#lfpack.LFPackReader.geometry_full) | Full per-electrode probe geometry, independent of ``bin_channels``. |
 | [nc](#lfpack.LFPackReader.nc) | Number of output channels (raw nc // bin_channels). |
+| [saturation](#lfpack.LFPackReader.saturation) | Insertion-level table of ADC-saturated intervals. |
+| [saturation_summary](#lfpack.LFPackReader.saturation_summary) | Summary of saturation over the whole recording, read from dataset attrs. |
 | [t0](#lfpack.LFPackReader.t0) | Session-clock time in seconds at LFP sample 0. NaN when no sync data. |
 | [times](#lfpack.LFPackReader.times) | Session-clock timestamps in seconds for every LFP sample. |
 
@@ -56,6 +58,7 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | [read](#lfpack.LFPackReader.read) | Decompress and return a sample range. |
 | [read_samples](#lfpack.LFPackReader.read_samples) | Read and decompress a sample range with optional spatial binning. |
 | [recordings](#lfpack.LFPackReader.recordings) | List recording keys at the root of an H5 file written by compress_to_h5. |
+| [saturation_mask](#lfpack.LFPackReader.saturation_mask) | Boolean saturation mask over a sample range, at this reader's sampling rate. |
 | [scales](#lfpack.LFPackReader.scales) | List scale indices available for a recording. |
 
 ### read { #lfpack.LFPackReader.read }
@@ -134,6 +137,31 @@ List recording keys at the root of an H5 file written by compress_to_h5.
 | Name   | Type        | Description   |
 |--------|-------------|---------------|
 |        | list of str |               |
+
+### saturation_mask { #lfpack.LFPackReader.saturation_mask }
+
+```python
+LFPackReader.saturation_mask(first_sample=0, last_sample=None)
+```
+
+Boolean saturation mask over a sample range, at this reader's sampling rate.
+
+The stored intervals are at the raw LFP rate; they are converted to this reader's
+(decimated) rate with interval edges rounded outward — ``start`` floored, ``stop``
+ceiled — so a saturated span never rounds away to zero width.
+
+#### Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type        | Description                                                                     | Default   |
+|--------------|-------------|---------------------------------------------------------------------------------|-----------|
+| first_sample | int         | First output sample of the requested window (inclusive).  Default 0.            | `0`       |
+| last_sample  | int or None | Last output sample (exclusive).  Default None → end of recording (``self.ns``). | `None`    |
+
+#### Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                                                         | Description   |
+|--------|--------------------------------------------------------------|---------------|
+|        | np.ndarray of bool, shape ``(last_sample - first_sample,)``. |               |
 
 ### scales { #lfpack.LFPackReader.scales }
 

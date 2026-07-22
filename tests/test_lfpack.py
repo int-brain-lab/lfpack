@@ -358,6 +358,9 @@ class TestLFPackReaderAPI(unittest.TestCase):
         n = 4
         atlas_id = np.repeat(np.arange(self.NC // n, dtype=np.int32), n)
         acronym = [f"reg{i // n}" for i in range(self.NC)]
+        # labels: bad-channel quality flag, constant within each bin group so the
+        # within-group mode is well defined (cycles through 0=good..3=outside).
+        labels = np.repeat(np.arange(self.NC // n, dtype=np.int8) % 4, n)
         with h5py.File(self.h5, "a") as f:
             meta = f["r/00/meta"]
             meta.attrs["ml"] = ml
@@ -365,7 +368,8 @@ class TestLFPackReaderAPI(unittest.TestCase):
             meta.attrs["dv"] = dv
             meta.attrs["atlas_id"] = atlas_id
             meta.attrs["acronym"] = acronym
-        return ml, ap, dv, atlas_id, acronym
+            meta.attrs["labels"] = labels
+        return ml, ap, dv, atlas_id, acronym, labels
 
     def test_channels_no_annotation(self):
         """channels / channels_full work without brain-location attrs (optional fields)."""
@@ -380,19 +384,20 @@ class TestLFPackReaderAPI(unittest.TestCase):
         """channels_full returns raw (nc,) arrays regardless of bin_channels."""
         sr = lfpack.LFPackReader(self.h5)
         sr.close()
-        ml, ap, dv, atlas_id, acronym = self._annotate_h5()
+        ml, ap, dv, atlas_id, acronym, labels = self._annotate_h5()
         for bin_ch in (1, 4):
             ch = lfpack.LFPackReader(self.h5, bin_channels=bin_ch).channels_full
             np.testing.assert_array_almost_equal(ch["x"], ml)
             np.testing.assert_array_almost_equal(ch["z"], dv)
             self.assertEqual(ch["atlas_id"].shape, (self.NC,))
             self.assertEqual(ch["acronym"], acronym)
+            np.testing.assert_array_equal(ch["labels"], labels)
 
     def test_channels_binned_aggregation(self):
         """channels aggregates float fields by mean and categorical fields by mode."""
         sr = lfpack.LFPackReader(self.h5)
         sr.close()
-        ml, ap, dv, atlas_id, acronym = self._annotate_h5()
+        ml, ap, dv, atlas_id, acronym, labels = self._annotate_h5()
         n = 4
         sr_b = lfpack.LFPackReader(self.h5, bin_channels=n)
         ch = sr_b.channels
@@ -404,6 +409,9 @@ class TestLFPackReaderAPI(unittest.TestCase):
         self.assertEqual(ch["atlas_id"].shape, (nc_b,))
         np.testing.assert_array_equal(ch["atlas_id"], np.arange(nc_b, dtype=np.int32))
         self.assertEqual(ch["acronym"], [f"reg{i}" for i in range(nc_b)])
+        # labels: mode per bin (each group is a single label value)
+        self.assertEqual(ch["labels"].shape, (nc_b,))
+        np.testing.assert_array_equal(ch["labels"], np.arange(nc_b, dtype=np.int8) % 4)
 
     def test_fs_without_sync_returns_nominal(self):
         """fs falls back to the nominal rate stored in meta when no sync data."""

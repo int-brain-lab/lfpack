@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Bad-channel detection labels (0=good, 1=dead, 2=noisy, 3=outside brain) are now
+  persisted for quality control instead of being discarded after interpolation.
+  `compress_to_h5` accepts a `labels` key in its `channels` dict (written as an int8
+  attr on the scale-`00` `meta`), `compress_bin_to_h5` forwards the auto-detected
+  labels, and `LFPackReader.channels` / `channels_full` expose them under the `labels`
+  key (within-group mode when `bin_channels > 1`). Optional and backwards-compatible.
+
 ## [0.2.0] - 2026-06-30
 
 ### Added

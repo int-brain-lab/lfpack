@@ -139,7 +139,9 @@ This ensures dominant spatial modes receive finer temporal detail than weak mode
 
 Non-zero coefficients are stored as sparse index/value pairs in HDF5.
 
-**Parameters:** `epsilon` — SVD noise threshold multiplier (default `150`); `alpha` — WP threshold multiplier (default `28`)
+**Survival floor.** Because each row of $V_r^\top$ has unit norm, its wavelet-packet coefficients have a fixed magnitude ceiling ($\max_j|w_{kj}| \approx 0.2\text{–}0.4$). On low-SNR chunks — where even the dominant mode is weak, $s_0/\sigma_\text{noise} \lesssim \alpha/\max_j|w_{0j}| \approx 140$ — the threshold exceeds every coefficient and the whole chunk reconstructs to exact zero, silently discarding real low-amplitude LFP. To prevent this the dominant mode ($k=0$) always keeps its `floor_k` largest coefficients. The floor is a no-op on high-SNR recordings (their dominant row keeps far more than `floor_k`, so their output is bit-for-bit unchanged) and on saturation-muted spans, which enter as all-zero and still reconstruct to zero ($s_0 = 0 \Rightarrow$ `U_scaled` $= 0$).
+
+**Parameters:** `epsilon` — SVD noise threshold multiplier (default `150`); `alpha` — WP threshold multiplier (default `28`); `floor_k` — minimum WP coefficients kept on the dominant mode (default `64`)
 
 ### Guard bands
 

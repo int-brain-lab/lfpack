@@ -12,6 +12,7 @@ run_cadzow_checkpoint(
     niter=1,
     fmax=None,
     nswx=64,
+    ovx=32,
     gap_threshold=2.0,
     ppca_k=2.0,
     n_jobs=4,
@@ -38,6 +39,7 @@ contains no guard bands and can be memory-mapped directly.
 | niter         | int                        | Number of Cadzow iterations.  Default 1.                                                                                                                                                     | `1`             |
 | fmax          | float or None              | Max frequency for Cadzow [Hz].  None → Nyquist.  Default None.                                                                                                                               | `None`          |
 | nswx          | int                        | Cadzow channel-window width.  Default 64.                                                                                                                                                    | `64`            |
+| ovx           | int                        | Cadzow channel-window overlap.  Default 32 (50% of nswx).                                                                                                                                    | `32`            |
 | gap_threshold | float                      | Adaptive-rank gap threshold.  Default 2.0.                                                                                                                                                   | `2.0`           |
 | ppca_k        | float                      | PPCA outlier-suppression threshold.  Default 2.0.                                                                                                                                            | `2.0`           |
 | n_jobs        | int                        | Number of chunks processed in parallel via ProcessPoolExecutor.  Each worker subprocess calls cadzow_denoiser with n_jobs=1 and writes its result directly to the output memmap.  Default 4. | `4`             |

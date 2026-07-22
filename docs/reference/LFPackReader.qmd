@@ -40,9 +40,14 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | Name | Description |
 | --- | --- |
 | [bin_channels](#lfpack.LFPackReader.bin_channels) | Number of adjacent channels summed on every read (1 = no binning). |
+| [channels](#lfpack.LFPackReader.channels) | Per-channel info aggregated over bin groups when ``bin_channels > 1``. |
+| [channels_full](#lfpack.LFPackReader.channels_full) | Full per-electrode channel info, independent of ``bin_channels``. |
+| [fs](#lfpack.LFPackReader.fs) | LFP sample rate in Hz, sync-corrected when sync data is present. |
 | [geometry](#lfpack.LFPackReader.geometry) | Probe geometry averaged over each bin group. |
 | [geometry_full](#lfpack.LFPackReader.geometry_full) | Full per-electrode probe geometry, independent of ``bin_channels``. |
 | [nc](#lfpack.LFPackReader.nc) | Number of output channels (raw nc // bin_channels). |
+| [t0](#lfpack.LFPackReader.t0) | Session-clock time in seconds at LFP sample 0. NaN when no sync data. |
+| [times](#lfpack.LFPackReader.times) | Session-clock timestamps in seconds for every LFP sample. |
 
 ## Methods
 

@@ -18,6 +18,8 @@ compress_bin_to_h5(
     highpass_cutoff=2.0,
     car=True,
     fig_dir=None,
+    t0_sync=None,
+    fs_sync=None,
 )
 ```
 
@@ -45,7 +47,7 @@ prevents incoherent channels from collapsing the noise-floor estimate and inflat
 | q                      | int                 | Decimation factor.  Default 10 (2500 → 250 Hz).                                                                                                                                                                                               | `10`                |
 | h                      | dict or None        | Probe header with keys 'x' and 'y'.  Defaults to NP1 geometry for nc channels.                                                                                                                                                                | `None`              |
 | cadzow_checkpoint_file | path - like or None | Path for the intermediate Cadzow .npy checkpoint (ns_lf, nc) float32. If None a temporary file is written next to out_h5 and deleted afterwards. If the file already exists the decimate+Cadzow step is skipped entirely.                     | `None`              |
-| cadzow_kwargs          | dict or None        | Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx, gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).                               | `None`              |
+| cadzow_kwargs          | dict or None        | Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx, ovx, gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).                          | `None`              |
 | channel_labels         | np.ndarray or None  | Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain). If None and the checkpoint does not exist, labels are auto-detected via ibldsp.voltage.detect_bad_channels_cbin.  Pass an array of zeros to skip detection explicitly. | `None`              |
 | epsilon                | float               | SVD threshold multiplier.  Default 150.                                                                                                                                                                                                       | `150.0`             |
 | alpha                  | float               | WP threshold multiplier.  Default 28.                                                                                                                                                                                                         | `28.0`              |

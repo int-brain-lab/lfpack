@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labels, and `LFPackReader.channels` / `channels_full` expose them under the `labels`
   key (within-group mode when `bin_channels > 1`). Optional and backwards-compatible.
 
+### Fixed
+- `compress` no longer decompresses low-SNR chunks to exact zero (the WP threshold could
+  wipe every coefficient of the unit-norm `Vh` rows, silently destroying real
+  low-amplitude LFP). New `floor_k=64` survival floor keeps the dominant mode's largest
+  coefficients; high-SNR recordings are bit-for-bit unchanged and saturation-muted spans
+  still read as zero. Closes #2.
+
 ## [0.2.0] - 2026-06-30
 
 ### Added

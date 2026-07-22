@@ -85,6 +85,32 @@ class TestLfpack(unittest.TestCase):
         r_high_eps = lfpack.compress(self.data, epsilon=500.0).U_scaled.shape[1]
         self.assertGreaterEqual(r_low_eps, r_high_eps)
 
+    def test_survival_floor_prevents_all_zero(self):
+        """A chunk that over-thresholds to all-zero (floor_k=0) is rescued by the floor."""
+        # A huge alpha thresholds every WP coefficient, reproducing the low-SNR pathology.
+        c0 = lfpack.compress(self.data, alpha=1e6, floor_k=0)
+        cf = lfpack.compress(self.data, alpha=1e6, floor_k=64)
+        self.assertTrue(np.all(lfpack.decompress(c0) == 0), "floor_k=0 should decompress to all-zero")
+        rec = lfpack.decompress(cf)
+        self.assertFalse(np.all(rec == 0), "survival floor must keep the reconstruction non-zero")
+        # dominant mode keeps floor_k coefficients (one row floored, not every row)
+        self.assertEqual(int(np.count_nonzero(cf.Vh_hat)), 64)
+
+    def test_survival_floor_zero_input_stays_zero(self):
+        """All-zero (saturation-muted) input decompresses to exact zero despite the floor."""
+        z = np.zeros_like(self.data)
+        rec = lfpack.decompress(lfpack.compress(z, floor_k=64))
+        self.assertTrue(np.all(rec == 0))
+
+    def test_survival_floor_no_op_when_row_keeps_enough(self):
+        """When the dominant row already keeps >= floor_k coeffs the floor never fires,
+        so the reconstruction is bit-for-bit identical (the real-LFP high-SNR case)."""
+        c0 = lfpack.compress(self.data, alpha=1.0, floor_k=0)
+        self.assertGreaterEqual(int(np.count_nonzero(c0.Vh_hat[0])), 64)  # config sanity
+        r0 = lfpack.decompress(c0)
+        r64 = lfpack.decompress(lfpack.compress(self.data, alpha=1.0, floor_k=64))
+        self.assertTrue(np.array_equal(r0, r64))
+
     def test_decompress_bin_channels_shape(self):
         """decompress(bin_channels=N) returns (nc//N, ns)."""
         c = lfpack.compress(self.data)

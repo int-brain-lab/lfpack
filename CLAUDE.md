@@ -32,7 +32,7 @@ Nearly all code lives in `src/lfpack/_core.py` (~1000 lines). The public API is 
 
 ### Compression pipeline (`compress_bin_to_h5`)
 
-1. Bad-channel detection (`ibldsp.voltage.detect_bad_channels_cbin`)
+1. Bad-channel detection (`ibldsp.voltage.detect_bad_channels_cbin`) — labels saved to the scale-`00` `meta` as a `labels` int8 attr; read via `LFPackReader.channels`/`channels_full` under the `labels` key.
 2. Dephasing — sample-shift correction (NP1 only, via `ibldsp.fourier.fshift`)
 3. Highpass filter — 2 Hz zero-phase 3rd-order Butterworth
 4. Bad-channel interpolation — distance-weighted neighbors

@@ -582,9 +582,11 @@ def compress_to_h5(
     channels : dict or None
         Optional per-channel brain location annotations.  Accepted keys (all
         optional): ``x`` (ML, metres), ``y`` (AP, metres), ``z`` (DV, metres),
-        ``atlas_id`` (int32 array), ``acronym`` (list of str).  Matches the dict
-        returned by ``LFPackReader.channels_full``.  Written only to the ``00``
-        scale; ignored when ``scale != 0``.
+        ``atlas_id`` (int32 array), ``acronym`` (list of str), ``labels``
+        (int8 array of bad-channel quality flags: 0=good, 1=dead, 2=noisy,
+        3=outside brain).  Matches the dict returned by
+        ``LFPackReader.channels_full``.  Written only to the ``00`` scale;
+        ignored when ``scale != 0``.
     """
     import h5py
 
@@ -633,6 +635,8 @@ def compress_to_h5(
                 mg.attrs["atlas_id"] = np.asarray(channels["atlas_id"], dtype=np.int32)
             if "acronym" in channels:
                 mg.attrs["acronym"] = list(channels["acronym"])
+            if channels.get("labels") is not None:
+                mg.attrs["labels"] = np.asarray(channels["labels"], dtype=np.int8)
 
         cg = f.create_group(f"{root}/chunks")
         from joblib import Parallel, delayed
@@ -917,6 +921,7 @@ def compress_bin_to_h5(
         fs=fs_lf,
         t0_sync=t0_sync,
         fs_sync=fs_sync,
+        channels={"labels": channel_labels} if channel_labels is not None else None,
         n_jobs=n_jobs,
     )
 
@@ -1093,6 +1098,8 @@ class LFPackReader(_spikeglx.Reader):
         - ``z``          : ndarray (nc_raw,) float32 — dorsoventral, metres  *(optional)*
         - ``atlas_id``   : ndarray (nc_raw,) int32   — Allen CCF structure ID *(optional)*
         - ``acronym``    : list[str] (nc_raw,)        — brain region acronym  *(optional)*
+        - ``labels``     : ndarray (nc_raw,) int8    — bad-channel quality flag
+          (0=good, 1=dead, 2=noisy, 3=outside brain) *(optional)*
         """
         import h5py
 
@@ -1114,6 +1121,8 @@ class LFPackReader(_spikeglx.Reader):
             if "acronym" in attrs:
                 raw = attrs["acronym"]
                 out["acronym"] = [v.decode() if isinstance(v, bytes) else v for v in raw]
+            if "labels" in attrs:
+                out["labels"] = attrs["labels"][:].astype(np.int8)
         return out
 
     @property
@@ -1121,7 +1130,7 @@ class LFPackReader(_spikeglx.Reader):
         """Per-channel info aggregated over bin groups when ``bin_channels > 1``.
 
         Float fields (lateral_um, axial_um, x, y, z) are averaged within each group.
-        Categorical fields (atlas_id, acronym) take the within-group mode.
+        Categorical fields (atlas_id, acronym, labels) take the within-group mode.
         Use ``channels_full`` to always get raw per-electrode data.
 
         Returns
@@ -1140,6 +1149,9 @@ class LFPackReader(_spikeglx.Reader):
         if "atlas_id" in full:
             ids = full["atlas_id"][: nc_binned * n].reshape(nc_binned, n)
             out["atlas_id"] = np.array([_mode1d(ids[i]) for i in range(nc_binned)], dtype=np.int32)
+        if "labels" in full:
+            lab = full["labels"][: nc_binned * n].reshape(nc_binned, n)
+            out["labels"] = np.array([_mode1d(lab[i]) for i in range(nc_binned)], dtype=np.int8)
         if "acronym" in full and "atlas_id" in full:
             full_ids = full["atlas_id"]
             full_acr = full["acronym"]

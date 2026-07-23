@@ -890,8 +890,14 @@ def compress_bin_to_h5(
     sglx_meta = sr.meta
 
     if h is None:
-        _h = neuropixel.trace_header(version=1)
-        h = {k: v[:nc] for k, v in _h.items()}
+        # Real probe geometry from the SpikeGLX channel map so non-NP1 probes (e.g. NP2
+        # single-shank) get true site positions, not a default NP1 header.  sort=True
+        # matches the Reader's default channel sorting used by the pre-processing.  Falls
+        # back to the NP1 header when the meta has no geometry map (older NP1 recordings).
+        _h = _spikeglx.geometry_from_meta(sglx_meta, nc=nc, sort=True)
+        if _h is None:
+            _h = neuropixel.trace_header(version=1)
+        h = {k: np.asarray(v)[:nc] for k, v in _h.items()}
 
     # Determine checkpoint path
     if cadzow_checkpoint_file is None:

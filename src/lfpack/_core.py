@@ -264,16 +264,20 @@ def decompress(compressed: LFPCompressed, bin_channels: int = 1) -> np.ndarray:
         Vh_time_ext = _reconstruct_vh_from_wp(compressed.Vh_hat, ns_ext, r)
         Vh_time = Vh_time_ext[:, lo : lo + ns]
 
-    if bin_channels > 1:
-        # Sum U_scaled rows in groups before the matrix multiply so the result
-        # is (nc_binned, ns) rather than (nc, ns) — no large intermediate.
-        nc = compressed.U_scaled.shape[0]
-        nc_binned = nc // bin_channels
-        U = compressed.U_scaled[: nc_binned * bin_channels].astype(np.float64)
-        U_binned = U.reshape(nc_binned, bin_channels, r).sum(axis=1)
-        x_hat = U_binned @ Vh_time
-    else:
-        x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
+    # numpy's SIMD matmul can raise spurious divide/overflow/invalid FPE flags on finite
+    # inputs (it evaluates padding lanes); silence them here. nan_to_num below remains the
+    # genuine guard for any truly non-finite value.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        if bin_channels > 1:
+            # Sum U_scaled rows in groups before the matrix multiply so the result
+            # is (nc_binned, ns) rather than (nc, ns) — no large intermediate.
+            nc = compressed.U_scaled.shape[0]
+            nc_binned = nc // bin_channels
+            U = compressed.U_scaled[: nc_binned * bin_channels].astype(np.float64)
+            U_binned = U.reshape(nc_binned, bin_channels, r).sum(axis=1)
+            x_hat = U_binned @ Vh_time
+        else:
+            x_hat = compressed.U_scaled.astype(np.float64) @ Vh_time
     return np.nan_to_num(x_hat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
@@ -553,6 +557,8 @@ def compress_to_h5(
     fs_sync=None,
     channels=None,
     n_jobs=4,
+    saturation_intervals=None,
+    saturation_attrs=None,
 ):
     """
     Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
@@ -573,6 +579,13 @@ def compress_to_h5(
                                          attrs: ns_original, ns_extended, left_overlap,
                                                 vh_shape, epsilon, alpha, cr_svd, cr_wp,
                                                 cr_total, rmse
+
+    /<recording>/saturation              dataset (n_intervals, 2) int64 of
+                                         [start_sample, stop_sample] at the raw LFP rate,
+                                         written once per recording (scale 00 only).
+                                         attrs: fs, ns_total, n_saturated_samples,
+                                                saturated_fraction, v_per_sec, proportion,
+                                                mute_window_samples, muted
 
     where <scale_str> = f'{scale:02d}', e.g. '00', '01', …  Multiple recordings and/or
     scales can coexist in a single file; merging two files is a plain group copy.
@@ -616,6 +629,13 @@ def compress_to_h5(
         3=outside brain).  Matches the dict returned by
         ``LFPackReader.channels_full``.  Written only to the ``00`` scale;
         ignored when ``scale != 0``.
+    saturation_intervals : np.ndarray or None
+        ``(n_intervals, 2)`` int64 array of ``[start_sample, stop_sample]`` saturated
+        spans at the raw LFP rate.  Written once at ``/<recording>/saturation`` (scale
+        ``00`` only).  Default None (no saturation table).
+    saturation_attrs : dict or None
+        Attributes attached to the saturation dataset (fs, ns_total, saturated_fraction,
+        detection parameters, whether muting was applied).  Default None.
     """
     import h5py
 
@@ -666,6 +686,15 @@ def compress_to_h5(
                 mg.attrs["acronym"] = list(channels["acronym"])
             if channels.get("labels") is not None:
                 mg.attrs["labels"] = np.asarray(channels["labels"], dtype=np.int8)
+
+        # Insertion-level saturation table (raw-rate sample intervals), scale-independent
+        # so it is written once at the recording level alongside the scale groups.
+        if saturation_intervals is not None and scale == 0:
+            sat_arr = np.asarray(saturation_intervals, dtype=np.int64).reshape(-1, 2)
+            sat_kw = dict(compression="gzip", shuffle=True) if sat_arr.shape[0] else {}
+            sat_ds = f.create_dataset(f"{recording}/saturation", data=sat_arr, **sat_kw)
+            for k, v in (saturation_attrs or {}).items():
+                sat_ds.attrs[k] = v
 
         cg = f.create_group(f"{root}/chunks")
         from joblib import Parallel, delayed
@@ -803,11 +832,13 @@ def compress_bin_to_h5(
     n_jobs=4,
     chunk=_COMPRESS_CHUNK,
     overlap=_COMPRESS_OVERLAP,
-    highpass_cutoff=2.0,
+    highpass_cutoff=0.5,
     car=True,
     fig_dir=None,
     t0_sync=None,
     fs_sync=None,
+    detect_saturation=True,
+    saturation_kwargs=None,
 ):
     """
     Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
@@ -863,20 +894,37 @@ def compress_bin_to_h5(
         SVD guard-band samples each side.  Default 128.
     highpass_cutoff : float or None
         3rd-order Butterworth zero-phase highpass corner [Hz] applied before decimation.
-        Default 2.0 Hz.  None disables the filter.
+        Default 0.5 Hz — keeps delta/infra-slow content; benchmarking (0.5/1/2 Hz) showed
+        faithful reconstruction with negligible compression-ratio impact and no chunk-seam
+        artefact (ibldsp warmup padding scales with the corner).  None disables the filter.
     car : bool
         Apply median common-average reference before decimation.  Default True.
     fig_dir : path-like or None
         If set, a bad-channel diagnostic figure is saved to this directory after detection.
         Uses ibldsp.plots.show_channels_labels on a single mid-recording batch.
         Filename: ``bad_channels_{bin_file.stem}.png``.  Default None (no figure).
+    detect_saturation : bool
+        If True (default), detect ADC-saturated samples on the raw LFP band before any
+        pre-processing (which would otherwise obscure the clipping), store the saturated
+        intervals as an insertion-level table in the HDF5 file, and — when Stage 1 is
+        actually run — mute the saturated stretches on the decimated output *after* Cadzow,
+        so no pre-processing stage can leak energy back into the muted span.  See
+        ``ibldsp.voltage.saturation``.
+    saturation_kwargs : dict or None
+        Forwarded to ``ibldsp.voltage.saturation_cbin`` (keys: ``max_voltage``,
+        ``v_per_sec``, ``proportion``, ``mute_window_samples``).  Default None uses the
+        ibldsp defaults with ``max_voltage`` taken from the SpikeGLX metadata.
 
     Returns
     -------
     Path
         Path to the output HDF5 file.
     """
-    from ibldsp.voltage import detect_bad_channels_cbin, resample_denoise_lfp_cbin
+    from ibldsp.voltage import (
+        detect_bad_channels_cbin,
+        resample_denoise_lfp_cbin,
+        saturation_cbin,
+    )
 
     bin_file = Path(bin_file)
     out_h5 = Path(out_h5)
@@ -906,9 +954,56 @@ def compress_bin_to_h5(
     else:
         cadzow_npy = Path(cadzow_checkpoint_file)
         delete_checkpoint = False
+    checkpoint_existed = cadzow_npy.exists()
+
+    # Saturation detection on the raw LFP band, before any pre-processing obscures the
+    # clipping.  Produces (a) a boolean .npy used to late-mute the saturated stretches on
+    # the decimated output (after Cadzow), and (b) an interval table stored at insertion
+    # level in the HDF5 file.
+    # saturation_cbin runs its chunk detection in parallel over n_jobs workers.
+    saturation_file = None
+    saturation_intervals = None
+    saturation_attrs = None
+    sat_mute_window = 7
+    if detect_saturation:
+        import pandas as pd
+
+        sat_kwargs = dict(saturation_kwargs or {})
+        sat_mute_window = int(sat_kwargs.get("mute_window_samples", 7))
+        max_voltage = sat_kwargs.get("max_voltage", sr.range_volts[: sr.nc - sr.nsync])
+        v_per_sec = sat_kwargs.get("v_per_sec", None)
+        print("Detecting saturation …")
+        saturation_file = out_h5.with_suffix(".saturation_tmp.npy")
+        sat_pqt = saturation_cbin(
+            sr,
+            file_saturation=saturation_file,
+            n_jobs=n_jobs,
+            max_voltage=max_voltage,
+            v_per_sec=v_per_sec,
+            proportion=sat_kwargs.get("proportion", 0.2),
+            mute_window_samples=sat_mute_window,
+        )
+        df_sat = pd.read_parquet(sat_pqt)
+        saturation_intervals = df_sat[["start_sample", "stop_sample"]].to_numpy(np.int64)
+        if saturation_intervals.size:
+            n_saturated = int((saturation_intervals[:, 1] - saturation_intervals[:, 0]).sum())
+        else:
+            n_saturated = 0
+        saturation_attrs = {
+            "fs": float(sr.fs),
+            "ns_total": int(sr.ns),
+            "n_saturated_samples": n_saturated,
+            "saturated_fraction": float(n_saturated / sr.ns) if sr.ns else 0.0,
+            "v_per_sec": float(v_per_sec) if v_per_sec is not None else float("nan"),
+            "proportion": float(sat_kwargs.get("proportion", 0.2)),
+            "mute_window_samples": sat_mute_window,
+            "muted": bool(not checkpoint_existed),
+        }
+        n_int = 0 if saturation_intervals is None else saturation_intervals.shape[0]
+        print(f"  {n_int} saturated interval(s), {saturation_attrs['saturated_fraction']:.4%} of samples")
 
     # Stage 1: decimate (+ optional Cadzow) → float32 checkpoint
-    if cadzow_npy.exists():
+    if checkpoint_existed:
         print(f"Using existing Cadzow checkpoint {cadzow_npy}")
     else:
         if channel_labels is None:
@@ -940,6 +1035,8 @@ def compress_bin_to_h5(
             car=car,
             cadzow_kwargs=cadzow_kwargs,
             n_jobs=n_jobs,
+            saturation_file=saturation_file,
+            mute_window_samples=sat_mute_window,
         )
 
     # Stage 2: compress checkpoint → HDF5
@@ -958,10 +1055,15 @@ def compress_bin_to_h5(
         fs_sync=fs_sync,
         channels={"labels": channel_labels} if channel_labels is not None else None,
         n_jobs=n_jobs,
+        saturation_intervals=saturation_intervals,
+        saturation_attrs=saturation_attrs,
     )
 
     if delete_checkpoint:
         cadzow_npy.unlink()
+    if saturation_file is not None:
+        saturation_file.unlink(missing_ok=True)
+        saturation_file.with_suffix(".pqt").unlink(missing_ok=True)
 
     return out_h5
 
@@ -1195,6 +1297,110 @@ class LFPackReader(_spikeglx.Reader):
                 for i in range(nc_binned)
             ]
         return out
+
+    @property
+    def saturation(self):
+        """Insertion-level table of ADC-saturated intervals.
+
+        Reads ``/<recording>/saturation`` (written once per recording, independent of
+        scale).  Sample columns are at the raw LFP rate stored in the dataset attrs;
+        seconds are derived from it.  Returns an empty frame for files written without
+        saturation detection (older files or ``detect_saturation=False``).
+
+        Returns
+        -------
+        pandas.DataFrame with columns ``start_sample``, ``stop_sample`` (raw-rate int),
+        ``start_sec``, ``stop_sec`` (float, relative to recording start).
+        """
+        import h5py
+        import pandas as pd
+
+        empty = pd.DataFrame(columns=["start_sample", "stop_sample", "start_sec", "stop_sec"])
+        if self._root is None:
+            return empty
+        recording = self._root.split("/")[0]
+        with h5py.File(self._h5_file, "r") as f:
+            key = f"{recording}/saturation"
+            if key not in f:
+                return empty
+            ds = f[key]
+            intervals = ds[()].reshape(-1, 2).astype(np.int64)
+            fs_raw = float(ds.attrs.get("fs", self._fs))
+        df = pd.DataFrame(intervals, columns=["start_sample", "stop_sample"])
+        df["start_sec"] = df["start_sample"] / fs_raw
+        df["stop_sec"] = df["stop_sample"] / fs_raw
+        return df
+
+    @property
+    def saturation_summary(self):
+        """Summary of saturation over the whole recording, read from dataset attrs.
+
+        Returns
+        -------
+        dict with keys ``n_intervals``, ``n_saturated_samples``, ``saturated_fraction``,
+        ``total_saturated_sec``, ``fs``, ``muted`` and the detection parameters.  Returns
+        ``{'saturated_fraction': 0.0, ...}`` when no saturation table is present.
+        """
+        import h5py
+
+        default = {
+            "n_intervals": 0,
+            "n_saturated_samples": 0,
+            "saturated_fraction": 0.0,
+            "total_saturated_sec": 0.0,
+        }
+        if self._root is None:
+            return default
+        recording = self._root.split("/")[0]
+        with h5py.File(self._h5_file, "r") as f:
+            key = f"{recording}/saturation"
+            if key not in f:
+                return default
+            ds = f[key]
+            attrs = {k: v.item() if hasattr(v, "item") else v for k, v in ds.attrs.items()}
+            n_intervals = int(ds.shape[0]) if ds.ndim == 2 else 0
+        fs_raw = float(attrs.get("fs", self._fs))
+        n_sat = int(attrs.get("n_saturated_samples", 0))
+        return {
+            **attrs,
+            "n_intervals": n_intervals,
+            "total_saturated_sec": n_sat / fs_raw if fs_raw else 0.0,
+        }
+
+    def saturation_mask(self, first_sample=0, last_sample=None):
+        """Boolean saturation mask over a sample range, at this reader's sampling rate.
+
+        The stored intervals are at the raw LFP rate; they are converted to this reader's
+        (decimated) rate with interval edges rounded outward — ``start`` floored, ``stop``
+        ceiled — so a saturated span never rounds away to zero width.
+
+        Parameters
+        ----------
+        first_sample : int
+            First output sample of the requested window (inclusive).  Default 0.
+        last_sample : int or None
+            Last output sample (exclusive).  Default None → end of recording (``self.ns``).
+
+        Returns
+        -------
+        np.ndarray of bool, shape ``(last_sample - first_sample,)``.
+        """
+        if last_sample is None:
+            last_sample = self.ns
+        n = int(last_sample - first_sample)
+        mask = np.zeros(max(n, 0), dtype=bool)
+        df = self.saturation
+        if df.empty or n <= 0:
+            return mask
+        ratio = self._fs / self.saturation_summary.get("fs", self._fs)
+        for s0, s1 in df[["start_sample", "stop_sample"]].to_numpy():
+            a = int(np.floor(s0 * ratio)) - first_sample
+            b = int(np.ceil(s1 * ratio)) - first_sample
+            a = max(a, 0)
+            b = min(b, n)
+            if b > a:
+                mask[a:b] = True
+        return mask
 
     @staticmethod
     def recordings(h5_file):

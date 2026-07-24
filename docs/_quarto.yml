@@ -66,3 +66,8 @@ quartodoc:
       desc: "Random-access decompression."
       contents:
         - LFPackReader
+    - title: "Multi-recording archives"
+      desc: "Combine or subset recordings across HDF5 files without re-compression."
+      contents:
+        - merge_h5
+        - subset_h5

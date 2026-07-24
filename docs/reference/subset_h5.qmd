@@ -1,0 +1,33 @@
+# subset_h5 { #lfpack.subset_h5 }
+
+```python
+subset_h5(src_h5, dst_h5, recordings, missing='raise')
+```
+
+Copy a subset of recordings out of a multi-recording HDF5 archive.
+
+The inverse of ``merge_h5``: instead of combining several single-recording
+files, this pulls selected top-level groups out of one already-merged
+archive, e.g. to carve a smaller public release (BWM) out of a larger
+internal superset (ephys-atlas). No re-compression is performed.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name       | Type                  | Description                                                                                                                                    | Default    |
+|------------|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| src_h5     | path - like           | Source multi-recording HDF5 file.                                                                                                              | _required_ |
+| dst_h5     | path - like           | Output HDF5 file (always created fresh).                                                                                                       | _required_ |
+| recordings | sequence of str       | Recording (top-level group) names to copy, in the given order.                                                                                 | _required_ |
+| missing    | (\'raise\', \'warn\') | How to handle names in *recordings* absent from *src_h5*. ``"raise"`` (default) raises ValueError; ``"warn"`` prints a warning and skips them. | `"raise"`  |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type   | Description                |
+|--------|--------|----------------------------|
+|        | Path   | Resolved path to *dst_h5*. |
+
+## Raises {.doc-section .doc-section-raises}
+
+| Name   | Type       | Description                                                                                                                        |
+|--------|------------|------------------------------------------------------------------------------------------------------------------------------------|
+|        | ValueError | If *missing* is ``"raise"`` and some *recordings* are absent from *src_h5*, or if *missing* is neither ``"raise"`` nor ``"warn"``. |

@@ -47,6 +47,7 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | [geometry_full](#lfpack.LFPackReader.geometry_full) | Full per-electrode probe geometry, independent of ``bin_channels``. |
 | [nc](#lfpack.LFPackReader.nc) | Number of output channels (raw nc // bin_channels). |
 | [saturation](#lfpack.LFPackReader.saturation) | Insertion-level table of ADC-saturated intervals. |
+| [saturation_mask](#lfpack.LFPackReader.saturation_mask) | Boolean saturation mask for the full recording, at this reader's sampling rate. |
 | [saturation_summary](#lfpack.LFPackReader.saturation_summary) | Summary of saturation over the whole recording, read from dataset attrs. |
 | [t0](#lfpack.LFPackReader.t0) | Session-clock time in seconds at LFP sample 0. NaN when no sync data. |
 | [times](#lfpack.LFPackReader.times) | Session-clock timestamps in seconds for every LFP sample. |
@@ -58,7 +59,7 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | [read](#lfpack.LFPackReader.read) | Decompress and return a sample range. |
 | [read_samples](#lfpack.LFPackReader.read_samples) | Read and decompress a sample range with optional spatial binning. |
 | [recordings](#lfpack.LFPackReader.recordings) | List recording keys at the root of an H5 file written by compress_to_h5. |
-| [saturation_mask](#lfpack.LFPackReader.saturation_mask) | Boolean saturation mask over a sample range, at this reader's sampling rate. |
+| [saturation_times](#lfpack.LFPackReader.saturation_times) | Saturation interval table with session-clock start/stop times. |
 | [scales](#lfpack.LFPackReader.scales) | List scale indices available for a recording. |
 
 ### read { #lfpack.LFPackReader.read }
@@ -138,30 +139,25 @@ List recording keys at the root of an H5 file written by compress_to_h5.
 |--------|-------------|---------------|
 |        | list of str |               |
 
-### saturation_mask { #lfpack.LFPackReader.saturation_mask }
+### saturation_times { #lfpack.LFPackReader.saturation_times }
 
 ```python
-LFPackReader.saturation_mask(first_sample=0, last_sample=None)
+LFPackReader.saturation_times()
 ```
 
-Boolean saturation mask over a sample range, at this reader's sampling rate.
+Saturation interval table with session-clock start/stop times.
 
-The stored intervals are at the raw LFP rate; they are converted to this reader's
-(decimated) rate with interval edges rounded outward — ``start`` floored, ``stop``
-ceiled — so a saturated span never rounds away to zero width.
-
-#### Parameters {.doc-section .doc-section-parameters}
-
-| Name         | Type        | Description                                                                     | Default   |
-|--------------|-------------|---------------------------------------------------------------------------------|-----------|
-| first_sample | int         | First output sample of the requested window (inclusive).  Default 0.            | `0`       |
-| last_sample  | int or None | Last output sample (exclusive).  Default None → end of recording (``self.ns``). | `None`    |
+Converts ``start_sample``/``stop_sample`` (raw-rate, recording-aligned) to
+``start_time``/``stop_time`` (session-clock seconds, matching ``times``) via the
+same sample-rate ratio and ``t0``/``fs`` used everywhere else in the reader —
+never divide the raw samples by a raw sample rate by hand.
 
 #### Returns {.doc-section .doc-section-returns}
 
-| Name   | Type                                                         | Description   |
-|--------|--------------------------------------------------------------|---------------|
-|        | np.ndarray of bool, shape ``(last_sample - first_sample,)``. |               |
+| Name   | Type                                                                             | Description   |
+|--------|----------------------------------------------------------------------------------|---------------|
+|        | pandas.DataFrame with columns ``start_sample``, ``stop_sample``, ``start_time``, |               |
+|        | ``stop_time``.                                                                   |               |
 
 ### scales { #lfpack.LFPackReader.scales }
 

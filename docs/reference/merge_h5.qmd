@@ -1,0 +1,31 @@
+# merge_h5 { #lfpack.merge_h5 }
+
+```python
+merge_h5(src_files, dst_h5, recording_map=None)
+```
+
+Merge multiple per-recording HDF5 files into one multi-recording archive.
+
+Each source file must contain exactly one top-level recording group (the
+layout produced by ``compress_to_h5`` and ``compress_bin_to_h5``).  The
+entire group is copied verbatim — no re-compression is performed.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name          | Type                          | Description                                                                                                                                                                | Default    |
+|---------------|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| src_files     | sequence of path-like         | Source HDF5 files, one recording per file.                                                                                                                                 | _required_ |
+| dst_h5        | path - like                   | Output multi-recording HDF5 file (always created fresh).                                                                                                                   | _required_ |
+| recording_map | dict mapping path-like to str | Override the recording name for specific source files.  Keys are matched by resolved absolute path.  Files absent from the map retain their original top-level group name. | `None`     |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type   | Description                |
+|--------|--------|----------------------------|
+|        | Path   | Resolved path to *dst_h5*. |
+
+## Raises {.doc-section .doc-section-raises}
+
+| Name   | Type       | Description                                                                                                               |
+|--------|------------|---------------------------------------------------------------------------------------------------------------------------|
+|        | ValueError | If a source file contains more than one top-level group, or if two source files would resolve to the same recording name. |

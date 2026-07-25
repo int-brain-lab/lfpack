@@ -818,6 +818,63 @@ def merge_h5(src_files, dst_h5, recording_map=None):
     return dst_h5.resolve()
 
 
+def subset_h5(src_h5, dst_h5, recordings, missing="raise"):
+    """
+    Copy a subset of recordings out of a multi-recording HDF5 archive.
+
+    The inverse of ``merge_h5``: instead of combining several single-recording
+    files, this pulls selected top-level groups out of one already-merged
+    archive, e.g. to carve a smaller public release (BWM) out of a larger
+    internal superset (ephys-atlas). No re-compression is performed.
+
+    Parameters
+    ----------
+    src_h5 : path-like
+        Source multi-recording HDF5 file.
+    dst_h5 : path-like
+        Output HDF5 file (always created fresh).
+    recordings : sequence of str
+        Recording (top-level group) names to copy, in the given order.
+    missing : {"raise", "warn"}
+        How to handle names in *recordings* absent from *src_h5*. ``"raise"``
+        (default) raises ValueError; ``"warn"`` prints a warning and skips them.
+
+    Returns
+    -------
+    Path
+        Resolved path to *dst_h5*.
+
+    Raises
+    ------
+    ValueError
+        If *missing* is ``"raise"`` and some *recordings* are absent from
+        *src_h5*, or if *missing* is neither ``"raise"`` nor ``"warn"``.
+    """
+    import h5py
+
+    if missing not in ("raise", "warn"):
+        raise ValueError(f"missing must be 'raise' or 'warn', got {missing!r}")
+
+    src_h5 = Path(src_h5).resolve()
+    with h5py.File(src_h5, "r") as f:
+        available = set(f.keys())
+
+    absent = [r for r in recordings if r not in available]
+    if absent:
+        if missing == "raise":
+            raise ValueError(f"{len(absent)} recording(s) absent from {src_h5.name}: {sorted(absent)}")
+        print(f"subset_h5: {len(absent)} recording(s) absent from {src_h5.name}, skipping: {sorted(absent)}")
+
+    kept = [r for r in recordings if r not in absent]
+
+    dst_h5 = Path(dst_h5)
+    with h5py.File(src_h5, "r") as src, h5py.File(dst_h5, "w", libver=_H5_LIBVER) as dst:
+        for recording in tqdm(kept, desc=dst_h5.stem, unit="PID"):
+            _transcopy_group(src[recording], dst.require_group(recording))
+
+    return dst_h5.resolve()
+
+
 def compress_bin_to_h5(
     bin_file,
     out_h5,
@@ -1303,19 +1360,17 @@ class LFPackReader(_spikeglx.Reader):
         """Insertion-level table of ADC-saturated intervals.
 
         Reads ``/<recording>/saturation`` (written once per recording, independent of
-        scale).  Sample columns are at the raw LFP rate stored in the dataset attrs;
-        seconds are derived from it.  Returns an empty frame for files written without
-        saturation detection (older files or ``detect_saturation=False``).
+        scale).  Returns an empty frame for files written without saturation detection
+        (older files or ``detect_saturation=False``).
 
         Returns
         -------
-        pandas.DataFrame with columns ``start_sample``, ``stop_sample`` (raw-rate int),
-        ``start_sec``, ``stop_sec`` (float, relative to recording start).
+        pandas.DataFrame with columns ``start_sample``, ``stop_sample`` (raw-rate int).
         """
         import h5py
         import pandas as pd
 
-        empty = pd.DataFrame(columns=["start_sample", "stop_sample", "start_sec", "stop_sec"])
+        empty = pd.DataFrame(columns=["start_sample", "stop_sample"])
         if self._root is None:
             return empty
         recording = self._root.split("/")[0]
@@ -1323,13 +1378,8 @@ class LFPackReader(_spikeglx.Reader):
             key = f"{recording}/saturation"
             if key not in f:
                 return empty
-            ds = f[key]
-            intervals = ds[()].reshape(-1, 2).astype(np.int64)
-            fs_raw = float(ds.attrs.get("fs", self._fs))
-        df = pd.DataFrame(intervals, columns=["start_sample", "stop_sample"])
-        df["start_sec"] = df["start_sample"] / fs_raw
-        df["stop_sec"] = df["stop_sample"] / fs_raw
-        return df
+            intervals = f[key][()].reshape(-1, 2).astype(np.int64)
+        return pd.DataFrame(intervals, columns=["start_sample", "stop_sample"])
 
     @property
     def saturation_summary(self):
@@ -1367,40 +1417,57 @@ class LFPackReader(_spikeglx.Reader):
             "total_saturated_sec": n_sat / fs_raw if fs_raw else 0.0,
         }
 
-    def saturation_mask(self, first_sample=0, last_sample=None):
-        """Boolean saturation mask over a sample range, at this reader's sampling rate.
+    @property
+    def saturation_mask(self):
+        """Boolean saturation mask for the full recording, at this reader's sampling rate.
+
+        A plain array over ``self.ns`` samples — index it exactly like the reader itself
+        (``sr.saturation_mask[a:b]``, ``sr.saturation_mask[::10]``, ...) rather than
+        passing a window as arguments.
 
         The stored intervals are at the raw LFP rate; they are converted to this reader's
         (decimated) rate with interval edges rounded outward — ``start`` floored, ``stop``
         ceiled — so a saturated span never rounds away to zero width.
 
-        Parameters
-        ----------
-        first_sample : int
-            First output sample of the requested window (inclusive).  Default 0.
-        last_sample : int or None
-            Last output sample (exclusive).  Default None → end of recording (``self.ns``).
-
         Returns
         -------
-        np.ndarray of bool, shape ``(last_sample - first_sample,)``.
+        np.ndarray of bool, shape ``(self.ns,)``.
         """
-        if last_sample is None:
-            last_sample = self.ns
-        n = int(last_sample - first_sample)
-        mask = np.zeros(max(n, 0), dtype=bool)
+        n = self.ns
+        mask = np.zeros(n, dtype=bool)
         df = self.saturation
-        if df.empty or n <= 0:
+        if df.empty:
             return mask
         ratio = self._fs / self.saturation_summary.get("fs", self._fs)
         for s0, s1 in df[["start_sample", "stop_sample"]].to_numpy():
-            a = int(np.floor(s0 * ratio)) - first_sample
-            b = int(np.ceil(s1 * ratio)) - first_sample
-            a = max(a, 0)
-            b = min(b, n)
+            a = max(int(np.floor(s0 * ratio)), 0)
+            b = min(int(np.ceil(s1 * ratio)), n)
             if b > a:
                 mask[a:b] = True
         return mask
+
+    def saturation_times(self):
+        """Saturation interval table with session-clock start/stop times.
+
+        Converts ``start_sample``/``stop_sample`` (raw-rate, recording-aligned) to
+        ``start_time``/``stop_time`` (session-clock seconds, matching ``times``) via the
+        same sample-rate ratio and ``t0``/``fs`` used everywhere else in the reader —
+        never divide the raw samples by a raw sample rate by hand.
+
+        Returns
+        -------
+        pandas.DataFrame with columns ``start_sample``, ``stop_sample``, ``start_time``,
+        ``stop_time``.
+        """
+        df = self.saturation.copy()
+        if df.empty:
+            df["start_time"] = df["stop_time"] = np.array([], dtype=float)
+            return df
+        ratio = self._fs / self.saturation_summary.get("fs", self._fs)
+        t0 = self._t0_sync if self._t0_sync is not None else 0.0
+        df["start_time"] = t0 + df["start_sample"] * ratio / self.fs
+        df["stop_time"] = t0 + df["stop_sample"] * ratio / self.fs
+        return df
 
     @staticmethod
     def recordings(h5_file):

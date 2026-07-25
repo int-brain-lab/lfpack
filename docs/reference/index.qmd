@@ -28,3 +28,12 @@ Random-access decompression.
 | | |
 | --- | --- |
 | [LFPackReader](LFPackReader.qmd#lfpack.LFPackReader) | Drop-in spikeglx.Reader for HDF5-packed LFP-compressed files. |
+
+## Multi-recording archives
+
+Combine or subset recordings across HDF5 files without re-compression.
+
+| | |
+| --- | --- |
+| [merge_h5](merge_h5.qmd#lfpack.merge_h5) | Merge multiple per-recording HDF5 files into one multi-recording archive. |
+| [subset_h5](subset_h5.qmd#lfpack.subset_h5) | Copy a subset of recordings out of a multi-recording HDF5 archive. |

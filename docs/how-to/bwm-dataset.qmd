@@ -87,6 +87,30 @@ s3_download_file(
 `s3_download_file` defaults to the IBL public bucket, shows a tqdm progress bar,
 and skips the download if the local file already has the correct size.
 
+## Session-clock times
+
+`sr.times` returns a `(ns,)` array of session-clock timestamps (seconds) for every
+LFP sample, derived from the sync signal stored during compression.
+Use it to align LFP traces with trial events or spike times:
+
+```python
+from lfpack import LFPackReader
+import numpy as np
+
+file_lfpack = "lf_compressed_all_bwm.h5"
+pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
+
+sr = LFPackReader(file_lfpack, recording=pid)
+
+n = int(10 * sr.fs)
+traces = sr[:n, :]      # (n_samples, nc) — first 10 s
+t = sr.times[:n]        # (n_samples,)    — session-clock seconds
+
+# Align with trial events loaded via ONE
+# stim_on = trials['stimOn_times']   # already in session-clock seconds
+# idx = np.searchsorted(t, stim_on)  # nearest LFP sample for each stimulus onset
+```
+
 ## List recordings
 
 Each file contains one entry per BWM probe. Recording identifiers are named after the probe identifier UUID `pid`.
@@ -128,27 +152,56 @@ print(f"Shape:       {traces.shape}")
 `LFPackReader` is a drop-in for `spikeglx.Reader`.
 Slicing decompresses only the requested chunks — the full file is never loaded into memory.
 
-## Binned-channel reads
+## Quality Control - Saturation
 
-Adjacent channels are spatially correlated at LFP frequencies.
-Passing `bin_channels` sums neighbouring channels during decompression, reducing
-memory use. A factor of 4 takes 384 channels down to 96 while keeping depth resolution useful for LFP.
+Each recording carries an insertion-level table of ADC-saturated (clipped) spans,
+detected on the raw LFP band before any filtering. The saturated stretches are muted
+(zeroed) in the decompressed output, so it's worth checking whether a window of
+interest overlaps one before trusting the amplitude.
 
 ```python
 from lfpack import LFPackReader
 
-file_lfpack = "lf_compressed_all_bwm.h5"
-pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
+sr = LFPackReader("lf_compressed_all_bwm.h5", recording=pid)
 
-sr = LFPackReader(file_lfpack, recording=pid, bin_channels=4)
+# Interval table: raw-rate sample indices, recording-aligned
+sr.saturation
+#    start_sample  stop_sample
+# 0        123456       125000
 
-traces = sr[:, :]      # (ns, 96) — full recording, 96 spatial bins
-print(sr.nc)           # 96
-print(sr.geometry["y"])           # mean depth of each 4-channel group
-print(sr.geometry_full['binned_channel_index'])  # spatial mapping of the original 384 channels into the 96 binned ones
+# Recording-level summary (fraction/count/whether muting was applied)
+sr.saturation_summary
+# {'saturated_fraction': 0.0052, 'n_intervals': 3, 'total_saturated_sec': 12.9, 'muted': True, ...}
 ```
 
-![Full-resolution (384 ch) vs binned ×4 (96 ch) LFP density for the same 4-second window](../figures/lfp_binned_comparison.jpg){fig-alt="Side-by-side LFP density plots at full and 4x binned channel resolution" .lightbox}
+`saturation_mask` gives a boolean array at the reader's own — decimated — sampling rate,
+indexed exactly like the reader itself rather than called with a window:
+
+```python
+n = int(10 * sr.fs)
+traces = sr[:n, :]                  # (n, nc)
+mask = sr.saturation_mask[:n]       # (n,) bool, True where saturated
+
+traces_clean = traces[~mask]
+```
+
+For session-clock timestamps of saturated intervals (e.g. to overlay against trial events),
+use `saturation_times` rather than converting `sr.saturation`'s samples to seconds by hand —
+it applies the same sync correction as [`sr.times`](#session-clock-times):
+
+```python
+sr.saturation_times()
+#    start_sample  stop_sample  start_time  stop_time
+# 0        123456       125000    1234.382    1235.000
+```
+
+All four (`saturation`, `saturation_summary`, `saturation_mask`, `saturation_times`) degrade
+gracefully to empty/default values on recordings without saturation detection, so the same
+code works across the whole dataset without a try/except.
+
+
+![Saturation detection across the 699-recording release: per-recording saturated-fraction distribution (left) and the 15 most-affected recordings (right).](../figures/bwm_saturation_detection.png){.lightbox}
+
 
 ## Channel brain locations
 
@@ -177,26 +230,24 @@ ch = sr.channels           # shapes (96,) — one entry per spatial bin
 ch_full = sr.channels_full # shapes (384,) — always raw per-electrode
 ```
 
-## Session-clock times
+## Binned-channel reads
 
-`sr.times` returns a `(ns,)` array of session-clock timestamps (seconds) for every
-LFP sample, derived from the sync signal stored during compression.
-Use it to align LFP traces with trial events or spike times:
+Adjacent channels are spatially correlated at LFP frequencies.
+Passing `bin_channels` sums neighbouring channels during decompression, reducing
+memory use. A factor of 4 takes 384 channels down to 96 while keeping depth resolution useful for LFP.
 
 ```python
 from lfpack import LFPackReader
-import numpy as np
 
 file_lfpack = "lf_compressed_all_bwm.h5"
 pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
 
-sr = LFPackReader(file_lfpack, recording=pid)
+sr = LFPackReader(file_lfpack, recording=pid, bin_channels=4)
 
-n = int(10 * sr.fs)
-traces = sr[:n, :]      # (n_samples, nc) — first 10 s
-t = sr.times[:n]        # (n_samples,)    — session-clock seconds
-
-# Align with trial events loaded via ONE
-# stim_on = trials['stimOn_times']   # already in session-clock seconds
-# idx = np.searchsorted(t, stim_on)  # nearest LFP sample for each stimulus onset
+traces = sr[:, :]      # (ns, 96) — full recording, 96 spatial bins
+print(sr.nc)           # 96
+print(sr.geometry["y"])           # mean depth of each 4-channel group
+print(sr.geometry_full['binned_channel_index'])  # spatial mapping of the original 384 channels into the 96 binned ones
 ```
+
+![Full-resolution (384 ch) vs binned ×4 (96 ch) LFP density for the same 4-second window](../figures/lfp_binned_comparison.jpg){fig-alt="Side-by-side LFP density plots at full and 4x binned channel resolution" .lightbox}

@@ -8,19 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Bad-channel detection labels (0=good, 1=dead, 2=noisy, 3=outside brain) are now
-  persisted for quality control instead of being discarded after interpolation.
-  `compress_to_h5` accepts a `labels` key in its `channels` dict (written as an int8
-  attr on the scale-`00` `meta`), `compress_bin_to_h5` forwards the auto-detected
-  labels, and `LFPackReader.channels` / `channels_full` expose them under the `labels`
-  key (within-group mode when `bin_channels > 1`). Optional and backwards-compatible.
+- `subset_h5` — copy a subset of recordings out of a multi-recording HDF5 archive
+  (inverse of `merge_h5`), for carving a smaller release (e.g. BWM) out of a larger
+  superset (e.g. ephys-atlas) without re-compression.
+- Bad-channel labels (0=good, 1=dead, 2=noisy, 3=outside brain) persisted through
+  compression and exposed via `LFPackReader.channels` / `channels_full`.
+- **Saturation detection and muting**: ADC-clipped spans are detected on the raw LFP
+  band, stored as a per-recording interval table, and muted (cosine-tapered zero) on
+  the decimated output after Cadzow denoising. Exposed via `LFPackReader.saturation`
+  (raw-rate sample indices, recording-aligned) and `.saturation_summary`.
+  `.saturation_mask` is a property, indexed like the reader itself (`sr.saturation_mask[a:b]`);
+  `.saturation_times()` converts samples to session-clock seconds (matching `times`).
 
 ### Fixed
-- `compress` no longer decompresses low-SNR chunks to exact zero (the WP threshold could
-  wipe every coefficient of the unit-norm `Vh` rows, silently destroying real
-  low-amplitude LFP). New `floor_k=64` survival floor keeps the dominant mode's largest
-  coefficients; high-SNR recordings are bit-for-bit unchanged and saturation-muted spans
-  still read as zero. Closes #2.
+- `compress` no longer decompresses low-SNR chunks to exact zero; new `floor_k=64`
+  survival floor keeps the dominant mode's largest coefficients. Closes #2.
 
 ## [0.2.0] - 2026-06-30
 

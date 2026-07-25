@@ -639,6 +639,76 @@ class TestMergeH5(unittest.TestCase):
         self.assertTrue(result.exists())
 
 
+class TestSubsetH5(unittest.TestCase):
+    """Tests for subset_h5: pulling a subset of recordings out of a merged archive."""
+
+    NC = 32
+    NS = 512
+    CHUNK = 256
+    OVERLAP = 32
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        data = _synthetic_lfp(nc=self.NC, ns=self.NS)
+        npy = self.tmp_path / "ck.npy"
+        np.save(npy, data.T.astype(np.float32))
+        self.h = {"x": np.zeros(self.NC, dtype=np.float32), "y": np.arange(self.NC, dtype=np.float32) * 25.0}
+        self.npy = npy
+
+        h5a = self.tmp_path / "rec_a.h5"
+        h5b = self.tmp_path / "rec_b.h5"
+        h5c = self.tmp_path / "rec_c.h5"
+        for h5, rec in ((h5a, "rec_a"), (h5b, "rec_b"), (h5c, "rec_c")):
+            lfpack.compress_to_h5(
+                self.npy, h5, recording=rec, h=self.h, chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1
+            )
+        self.merged = self.tmp_path / "merged.h5"
+        lfpack.merge_h5([h5a, h5b, h5c], self.merged)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_selected_recordings_present(self):
+        """subset_h5 copies exactly the requested recordings, nothing else."""
+        dst = self.tmp_path / "subset.h5"
+        lfpack.subset_h5(self.merged, dst, ["rec_a", "rec_c"])
+        self.assertEqual(sorted(lfpack.LFPackReader.recordings(dst)), ["rec_a", "rec_c"])
+
+    def test_subset_is_readable(self):
+        """LFPackReader can decompress data from a subset file."""
+        dst = self.tmp_path / "subset.h5"
+        lfpack.subset_h5(self.merged, dst, ["rec_b"])
+        sr = lfpack.LFPackReader(dst, recording="rec_b")
+        data, _ = sr.read_samples(0, self.NS)
+        self.assertEqual(data.shape, (self.NS, self.NC))
+
+    def test_missing_recording_raises_by_default(self):
+        """A requested recording absent from the source raises ValueError."""
+        dst = self.tmp_path / "subset.h5"
+        with self.assertRaises(ValueError):
+            lfpack.subset_h5(self.merged, dst, ["rec_a", "not_there"])
+
+    def test_missing_recording_warn_skips(self):
+        """missing='warn' skips absent recordings instead of raising."""
+        dst = self.tmp_path / "subset.h5"
+        lfpack.subset_h5(self.merged, dst, ["rec_a", "not_there"], missing="warn")
+        self.assertEqual(lfpack.LFPackReader.recordings(dst), ["rec_a"])
+
+    def test_invalid_missing_value_raises(self):
+        """An unrecognised missing= value raises ValueError."""
+        dst = self.tmp_path / "subset.h5"
+        with self.assertRaises(ValueError):
+            lfpack.subset_h5(self.merged, dst, ["rec_a"], missing="ignore")
+
+    def test_returns_resolved_path(self):
+        """subset_h5 returns the resolved Path to the output file."""
+        dst = self.tmp_path / "subset.h5"
+        result = lfpack.subset_h5(self.merged, dst, ["rec_a"])
+        self.assertIsInstance(result, Path)
+        self.assertTrue(result.exists())
+
+
 class TestCompressPipeline(unittest.TestCase):
     """Tests for compress_pipeline (Cadzow + SVD + WP end-to-end)."""
 
@@ -723,10 +793,9 @@ class TestSaturationTable(unittest.TestCase):
         sr = lfpack.LFPackReader(self._write(self.tmp_path / "s.h5"))
         df = sr.saturation
         self.assertEqual(len(df), 2)
+        self.assertEqual(list(df.columns), ["start_sample", "stop_sample"])
         np.testing.assert_array_equal(df["start_sample"].to_numpy(), self.intervals[:, 0])
-        # seconds derived from the stored raw fs
-        self.assertAlmostEqual(df["start_sec"].iloc[0], 1000 / self.FS_RAW)
-        self.assertAlmostEqual(df["stop_sec"].iloc[1], 8200 / self.FS_RAW)
+        np.testing.assert_array_equal(df["stop_sample"].to_numpy(), self.intervals[:, 1])
 
     def test_reader_summary(self):
         sr = lfpack.LFPackReader(self._write(self.tmp_path / "s.h5"))
@@ -739,7 +808,7 @@ class TestSaturationTable(unittest.TestCase):
 
     def test_mask_converts_to_reader_rate(self):
         sr = lfpack.LFPackReader(self._write(self.tmp_path / "s.h5"))
-        mask = sr.saturation_mask()
+        mask = sr.saturation_mask
         self.assertEqual(mask.shape, (self.NS,))
         # raw [1000,1500) → dec [100,150); raw [8000,8200) → dec [800,820)
         self.assertTrue(mask[100:150].all())
@@ -748,16 +817,20 @@ class TestSaturationTable(unittest.TestCase):
         self.assertFalse(mask[150:800].any())
         self.assertEqual(int(mask.sum()), 70)
 
-    def test_mask_windowed_and_outward_rounding(self):
+    def test_mask_is_indexable_like_reader(self):
         sr = lfpack.LFPackReader(self._write(self.tmp_path / "s.h5"))
+        # sliced exactly like sr[...] itself, not called with window arguments
+        self.assertTrue(sr.saturation_mask[100:150].all())
+        self.assertFalse(sr.saturation_mask[150:800].any())
+
+    def test_mask_windowed_and_outward_rounding(self):
         # a span that does not land on a decimated-sample boundary must round outward
         odd = np.array([[1005, 1006]], dtype=np.int64)  # raw → dec [100.5, 100.6) → [100,101)
         sr2 = lfpack.LFPackReader(self._write(self.tmp_path / "o.h5", intervals=odd))
-        m = sr2.saturation_mask(90, 120)
+        m = sr2.saturation_mask[90:120]
         self.assertEqual(m.shape, (30,))
         self.assertTrue(m[10])  # dec sample 100 → offset 10 in the window
         self.assertEqual(int(m.sum()), 1)
-        del sr
 
     def test_empty_intervals(self):
         empty = np.zeros((0, 2), dtype=np.int64)
@@ -765,7 +838,7 @@ class TestSaturationTable(unittest.TestCase):
         sr = lfpack.LFPackReader(self._write(self.tmp_path / "e.h5", intervals=empty, attrs=attrs))
         self.assertTrue(sr.saturation.empty)
         self.assertEqual(sr.saturation_summary["n_intervals"], 0)
-        self.assertFalse(sr.saturation_mask().any())
+        self.assertFalse(sr.saturation_mask.any())
 
     def test_backward_compatible_when_absent(self):
         """Files written without saturation detection expose empty table/default summary."""
@@ -783,7 +856,44 @@ class TestSaturationTable(unittest.TestCase):
         sr = lfpack.LFPackReader(h5)
         self.assertTrue(sr.saturation.empty)
         self.assertEqual(sr.saturation_summary["saturated_fraction"], 0.0)
-        self.assertFalse(sr.saturation_mask().any())
+        self.assertFalse(sr.saturation_mask.any())
+
+    def test_saturation_times_session_clock(self):
+        """saturation_times converts samples to session-clock seconds via t0/fs, not raw fs."""
+        t0, fs_sync = 1000.0, 250.5
+        h5 = self.tmp_path / "s.h5"
+        lfpack.compress_to_h5(
+            self.npy,
+            h5,
+            recording="rec_a",
+            h=self.h,
+            chunk=self.CHUNK,
+            overlap=self.OVERLAP,
+            fs=self.FS_DEC,
+            t0_sync=t0,
+            fs_sync=fs_sync,
+            n_jobs=1,
+            saturation_intervals=self.intervals,
+            saturation_attrs=self.attrs,
+        )
+        sr = lfpack.LFPackReader(h5)
+        df = sr.saturation_times()
+        self.assertEqual(list(df.columns), ["start_sample", "stop_sample", "start_time", "stop_time"])
+        ratio = self.FS_DEC / self.FS_RAW
+        expected_start0 = t0 + self.intervals[0, 0] * ratio / fs_sync
+        self.assertAlmostEqual(df["start_time"].iloc[0], expected_start0)
+        # falls back to t0=0 when no sync data is present
+        sr_nosync = lfpack.LFPackReader(self._write(self.tmp_path / "s2.h5"))
+        df2 = sr_nosync.saturation_times()
+        self.assertAlmostEqual(df2["start_time"].iloc[0], self.intervals[0, 0] * ratio / self.FS_DEC)
+
+    def test_saturation_times_empty(self):
+        empty = np.zeros((0, 2), dtype=np.int64)
+        attrs = {**self.attrs, "n_saturated_samples": 0, "saturated_fraction": 0.0}
+        sr = lfpack.LFPackReader(self._write(self.tmp_path / "e.h5", intervals=empty, attrs=attrs))
+        df = sr.saturation_times()
+        self.assertTrue(df.empty)
+        self.assertEqual(list(df.columns), ["start_sample", "stop_sample", "start_time", "stop_time"])
 
 
 if __name__ == "__main__":

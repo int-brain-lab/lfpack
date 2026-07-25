@@ -16,5 +16,9 @@ website:
     - contents:
       - reference/LFPackReader.qmd
       section: Reader
+    - contents:
+      - reference/merge_h5.qmd
+      - reference/subset_h5.qmd
+      section: Multi-recording archives
     id: reference
   - id: dummy-sidebar

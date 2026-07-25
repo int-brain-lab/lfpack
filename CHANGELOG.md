@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-25
+
 ### Added
 - `subset_h5` — copy a subset of recordings out of a multi-recording HDF5 archive
   (inverse of `merge_h5`), for carving a smaller release (e.g. BWM) out of a larger

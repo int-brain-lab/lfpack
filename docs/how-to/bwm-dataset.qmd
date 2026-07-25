@@ -6,6 +6,25 @@ The IBL Brain-Wide Map (BWM) LFP dataset is distributed as a 16GB `.h5` file
 containing 699 individual recordings of 384 channels each.
 
 
+::: {.callout-warning}
+## Known Dataset limitations
+
+- **Saturation events** — ADC-clipped stretches are flagged and muted in the decompressed
+  output; check whether your window of interest overlaps one before trusting amplitude.
+  See [Quality Control - Saturation](#quality-control---saturation).
+- **Missing sync for 7 probes** — `t0_sync`/`fs_sync` could not be computed for 7 probes
+  (spanning 4 sessions) due to a session-level sync data-quality issue upstream; `sr.t0`
+  returns `NaN` for these. See [lfpack#8](https://github.com/int-brain-lab/lfpack/issues/8).
+- **High-frequency roll-off** — the SVD + wavelet-packet codec trades off power above
+  roughly 20-30 Hz for compression ratio, more so at the aggressive tier. See the PSD
+  comparison below.
+- **Low-frequency channel-to-channel mismatch** — per-channel impedance/analog-filter
+  differences show up as amplitude outliers at low frequencies (below 1.5 Hz) and are not fully
+  corrected by the current pre-processing pipeline.
+
+![Average PSD across compression tiers for a representative recording — high frequencies are increasingly attenuated as compression ratio (CR) rises from cadzow-only to default (119×) to aggressive (254×).](../figures/bwm_compression_hf_rolloff.png){.lightbox}
+:::
+
 ::: {.callout-important}
 ## Before you start
 

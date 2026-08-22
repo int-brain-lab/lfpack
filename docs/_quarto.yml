@@ -33,6 +33,9 @@ website:
           - text: "Benchmark gallery"
             file: explanation/gallery.qmd
     right:
+      - text: "Help"
+        icon: question-circle
+        href: https://github.com/int-brain-lab/lfpack/issues
       - icon: github
         href: https://github.com/int-brain-lab/lfpack
 

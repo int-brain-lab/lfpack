@@ -40,3 +40,9 @@ Full documentation is at **https://int-brain-lab.github.io/lfpack/**.
 | [HDF5 format](https://int-brain-lab.github.io/lfpack/reference/hdf5-layout.html) | On-disk layout specification |
 | [Pipeline explanation](https://int-brain-lab.github.io/lfpack/explanation/pipeline.html) | Stage-by-stage description of the compression pipeline |
 | [SVD+WP benchmark](https://int-brain-lab.github.io/lfpack/explanation/benchmark.html) | RMSE, SNR, and compression-ratio results across 11 insertions |
+
+## Help and Feedback
+
+Have a question, found an issue, or want to share feedback? Please open an issue on
+[GitHub](https://github.com/int-brain-lab/lfpack/issues). We welcome bug reports, questions,
+suggestions, and other feedback.

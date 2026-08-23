@@ -149,8 +149,10 @@ Saturation interval table with session-clock start/stop times.
 
 Converts ``start_sample``/``stop_sample`` (raw-rate, recording-aligned) to
 ``start_time``/``stop_time`` (session-clock seconds, matching ``times``) via the
-same sample-rate ratio and ``t0``/``fs`` used everywhere else in the reader —
-never divide the raw samples by a raw sample rate by hand.
+same sample-rate ratio and ``_sample_to_time`` used by ``times`` — never divide
+the raw samples by a raw sample rate by hand, and never re-derive the affine
+formula independently of ``.times`` (it would silently diverge on any scale
+with real non-linear sync structure).
 
 #### Returns {.doc-section .doc-section-returns}
 

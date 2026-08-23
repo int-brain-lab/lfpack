@@ -11,6 +11,7 @@ subtitle: "Lossy LFP codec for Neuropixels recordings"
 | Section | Content |
 |---|---|
 | [Tutorial](tutorials/first-compression.qmd) | Install, compress, and read your first recording |
+| [How-To: Write your own file](how-to/write-your-own-file.qmd) | Write an HDF5 archive from your own LFP data, not via `compress_bin_to_h5` |
 | [How-To: Binned reads](how-to/binned-reads.qmd) | Memory-efficient channel-binned access |
 | [How-To: Multi-recording](how-to/multi-recording.qmd) | Work with multi-recording HDF5 files |
 | [Reference: API](reference/index.qmd) | Full API reference |

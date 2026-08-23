@@ -16,6 +16,8 @@ website:
         file: tutorials/first-compression.qmd
       - text: "How-To"
         menu:
+          - text: "Write your own file"
+            file: how-to/write-your-own-file.qmd
           - text: "Binned-channel reads"
             file: how-to/binned-reads.qmd
           - text: "Multi-recording files"

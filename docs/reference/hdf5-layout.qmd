@@ -29,6 +29,8 @@ This page documents the on-disk layout of `.h5` files written by lfpack.
 | `fs` | float | Nominal sample rate (Hz) |
 | `fs_sync` | float | Sync-corrected sample rate (Hz); `NaN` when not available |
 | `t0_sync` | float | Session-clock time in seconds at sample 0; `NaN` when not available |
+| `sync_samples` | float64 array | Optional. Non-linear sync knots: sample index, this scale's native units |
+| `sync_times` | float64 array | Optional. Non-linear sync knots: session-clock time (s), paired with `sync_samples` |
 | `epsilon` | float | SVD noise-floor threshold |
 | `alpha` | float | Wavelet-packet threshold multiplier |
 | `compress_chunk` | int | Samples per compressed chunk |
@@ -36,7 +38,33 @@ This page documents the on-disk layout of `.h5` files written by lfpack.
 | `geometry_y` | float32 array | Channel y positions (µm) |
 | `sglx_meta` | JSON string | Original SpikeGLX metadata |
 
-`fs_sync` and `t0_sync` are written by `compress_to_h5` when the caller supplies the corresponding keyword arguments.  `LFPackReader.fs` returns `fs_sync` when it is finite, otherwise falls back to `fs`.  `LFPackReader.t0` returns `t0_sync` when finite, otherwise `NaN`.  `LFPackReader.times` produces the full session-clock time vector using these values.
+### Two sync styles: linear affine vs. piecewise knots
+
+`fs_sync`/`t0_sync` are **always** plain scalars — every consumer that reads `meta.attrs`
+directly (e.g. `qc_report.py`) and `LFPackReader.t0`/`.fs` can rely on that regardless of
+which style below produced them.
+
+- **Linear (affine)** — pass scalar `t0_sync`/`fs_sync` to `compress_to_h5`/`compress_bin_to_h5`,
+  or write them directly as `meta` attrs. A single straight line maps sample index to session
+  time. Correct whenever the underlying clock relationship really is linear (ordinary
+  crystal-oscillator drift, ppm-level mismatch) — the common case.
+- **Piecewise (knots)** — write the raw sample↔time knot pairs verbatim via
+  `lfpack.write_sync_attrs(meta_group, sample_knots, time_knots)`, which derives and writes
+  `t0_sync`/`fs_sync` as a least-squares affine *summary* of the knots at the same time. Use
+  this whenever the true mapping has real non-linear structure a single affine would
+  misrepresent — a step, a truncated/re-based recording, per-probe drift — such as the knot
+  arrays IBL's `sync_probe_front_times()` already fits from raw sync pulses. Clear all four
+  attrs together with `lfpack.clear_sync_attrs(meta_group)` (e.g. before re-writing on a re-run,
+  so a failed attempt can never leave a previous run's attrs in place).
+
+`LFPackReader` picks the right tier automatically, in `_sample_to_time`: when `sync_samples`/
+`sync_times` are present it interpolates through them (`scipy.interpolate.interp1d`,
+`bounds_error=False`), falling back to the derived affine (`t0_sync + n/fs_sync`) for any
+sample outside the knot range (e.g. before the first knot, or after the last); when they're
+absent it just uses the affine directly, or the nominal `fs` when no sync was ever attached.
+Both `.times` and `saturation_times()` go through this same method, so they can never
+diverge from each other. See [how to write your own lfpack file](../how-to/write-your-own-file.qmd#sync)
+for a worked example.
 
 ## Chunk datasets
 

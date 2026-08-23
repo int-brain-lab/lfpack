@@ -3,18 +3,24 @@
 Each scale's ``meta`` group carries two related but independent tiers of sync
 metadata:
 
-- ``sync_samples`` / ``sync_times`` (float64 arrays) — the raw ALF sync knot
-  pairs (sample index <-> time), stored verbatim, in that scale's own native
-  sample-index units (rate-scaled per scale, mirroring the existing
-  ``fs_sync`` convention).
-- ``t0_sync`` / ``fs_sync`` (float64 scalars) — a least-squares affine summary
-  derived from the knots.  Downstream consumers (``LFPackReader.t0``/``.fs``,
-  ``qc_report.py`` reading ``meta.attrs`` directly via h5py, the LFP encoder
-  pipeline) require these two to always remain plain scalars, so they are
-  written here alongside the knots rather than only living in the knot pair.
+- ``sync_samples`` / ``sync_times`` (float64 datasets, gzip-compressed) — the
+  raw ALF sync knot pairs (sample index <-> time), stored verbatim, in that
+  scale's own native sample-index units (rate-scaled per scale, mirroring the
+  existing ``fs_sync`` convention). Stored as child *datasets* of ``meta``,
+  not attrs: a ``type='exact'`` fit keeps every raw pulse verbatim, which can
+  run to tens of thousands of knots — HDF5 attributes are backed by a fixed-size
+  object header message and raise ``OSError: object header message is too
+  large`` well before that (a 3B session's exact-type knots routinely run to
+  ~40k points, ~300KB per column, versus attrs' effectively-KB-scale ceiling).
+- ``t0_sync`` / ``fs_sync`` (float64 scalars, attrs) — a least-squares affine
+  summary derived from the knots. Downstream consumers (``LFPackReader.t0``/
+  ``.fs``, ``qc_report.py`` reading ``meta.attrs`` directly via h5py, the LFP
+  encoder pipeline) require these two to always remain plain scalar attrs, so
+  they are written here alongside the knots rather than only living in the
+  knot pair.
 
-This module centralises the attr names and the write/clear/validate logic so
-the reader (``lfpack._core.LFPackReader``) and the metadata-attachment
+This module centralises the dataset/attr names and the write/clear/validate
+logic so the reader (``lfpack._core.LFPackReader``) and the metadata-attachment
 pipeline share exactly one definition.
 """
 
@@ -22,8 +28,12 @@ from __future__ import annotations
 
 import numpy as np
 
-#: HDF5 attr names written/cleared as a unit by `write_sync_attrs`/`clear_sync_attrs`.
-SYNC_ATTRS = ("sync_samples", "sync_times", "t0_sync", "fs_sync")
+#: Knot pairs, stored as gzip-compressed datasets (not attrs — see module docstring).
+_SYNC_DATASETS = ("sync_samples", "sync_times")
+#: Derived affine summary, stored as plain scalar attrs.
+_SYNC_SCALAR_ATTRS = ("t0_sync", "fs_sync")
+#: All four names written/cleared as a unit by `write_sync_attrs`/`clear_sync_attrs`.
+SYNC_ATTRS = _SYNC_DATASETS + _SYNC_SCALAR_ATTRS
 
 
 def _validate_knots(sample_knots, time_knots) -> tuple[np.ndarray, np.ndarray]:
@@ -88,18 +98,27 @@ def write_sync_attrs(meta_group, sample_knots, time_knots) -> tuple[float, float
     slope, intercept = np.polyfit(sample_knots, time_knots, 1)
     t0_sync = float(intercept)
     fs_sync = float(1.0 / slope)
-    meta_group.attrs["sync_samples"] = sample_knots
-    meta_group.attrs["sync_times"] = time_knots
+    for name, data in zip(_SYNC_DATASETS, (sample_knots, time_knots)):
+        if name in meta_group:
+            del meta_group[name]
+        if name in meta_group.attrs:  # migration safety net: pre-fix lfpack wrote these as attrs
+            del meta_group.attrs[name]
+        meta_group.create_dataset(name, data=data, compression="gzip", shuffle=True)
     meta_group.attrs["t0_sync"] = t0_sync
     meta_group.attrs["fs_sync"] = fs_sync
     return t0_sync, fs_sync
 
 
 def clear_sync_attrs(meta_group) -> None:
-    """Delete all four sync attrs (`SYNC_ATTRS`) from a ``meta`` HDF5 group.
+    """Delete all four sync entries (`SYNC_ATTRS`) from a ``meta`` HDF5 group.
 
-    No-op for attrs that are already absent.
+    No-op for entries that are already absent.
     """
-    for key in SYNC_ATTRS:
-        if key in meta_group.attrs:
-            del meta_group.attrs[key]
+    for name in _SYNC_DATASETS:
+        if name in meta_group:
+            del meta_group[name]
+        if name in meta_group.attrs:  # migration safety net: pre-fix lfpack wrote these as attrs
+            del meta_group.attrs[name]
+    for name in _SYNC_SCALAR_ATTRS:
+        if name in meta_group.attrs:
+            del meta_group.attrs[name]

@@ -1201,7 +1201,8 @@ class LFPackReader(_spikeglx.Reader):
                 self._root = f"{recording}/{scale:02d}"
             meta_path = f"{self._root}/meta" if self._root else "meta"
             chunks_path = f"{self._root}/chunks" if self._root else "chunks"
-            attrs = f[meta_path].attrs
+            meta_group = f[meta_path]
+            attrs = meta_group.attrs
             self._nc = int(attrs["nc"])
             self._ns = int(attrs["ns_total"])
             self._fs = float(attrs["fs"])
@@ -1209,8 +1210,12 @@ class LFPackReader(_spikeglx.Reader):
             self._fs_sync = float(_v) if not np.isnan(_v) else None
             _v = attrs.get("t0_sync", np.nan)
             self._t0_sync = float(_v) if not np.isnan(_v) else None
-            sync_samples = attrs.get("sync_samples")
-            sync_times = attrs.get("sync_times")
+            # sync_samples/sync_times are child *datasets* of meta, not attrs — a
+            # type='exact' fit's knots (every raw pulse, verbatim) can run to tens of
+            # thousands of points, well past HDF5's per-attribute object-header-message
+            # size limit (see lfpack._sync module docstring).
+            sync_samples = meta_group.get("sync_samples")
+            sync_times = meta_group.get("sync_times")
             if sync_samples is not None and sync_times is not None:
                 self._sync_interp = interp1d(
                     np.asarray(sync_samples, dtype=np.float64),

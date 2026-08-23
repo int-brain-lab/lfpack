@@ -973,8 +973,11 @@ class TestSyncAttrs(unittest.TestCase):
         with h5py.File(self.h5, "w") as f:
             grp = f.create_group("meta")
             t0_sync, fs_sync = lfpack.write_sync_attrs(grp, sample_knots, time_knots)
-            np.testing.assert_array_equal(grp.attrs["sync_samples"], sample_knots)
-            np.testing.assert_array_equal(grp.attrs["sync_times"], time_knots)
+            # knots are child datasets (not attrs) — see _sync module docstring for why
+            np.testing.assert_array_equal(grp["sync_samples"][:], sample_knots)
+            np.testing.assert_array_equal(grp["sync_times"][:], time_knots)
+            self.assertNotIn("sync_samples", grp.attrs)
+            self.assertNotIn("sync_times", grp.attrs)
             self.assertAlmostEqual(grp.attrs["t0_sync"], t0_sync)
             self.assertAlmostEqual(grp.attrs["fs_sync"], fs_sync)
             self.assertIsInstance(t0_sync, float)
@@ -982,8 +985,33 @@ class TestSyncAttrs(unittest.TestCase):
 
             lfpack.clear_sync_attrs(grp)
             for key in lfpack.SYNC_ATTRS:
+                self.assertNotIn(key, grp)
                 self.assertNotIn(key, grp.attrs)
             lfpack.clear_sync_attrs(grp)  # no-op when already absent
+
+    def test_write_large_knot_array_uses_dataset_not_attr(self):
+        # Regression test: a type='exact' fit keeps every raw pulse verbatim, which can
+        # run to tens of thousands of knots (~40k/~300KB per column is typical for a 3B
+        # session). Storing that as an HDF5 attr raises "OSError: object header message
+        # is too large" well before this size — datasets have no such ceiling.
+        n = 50_000
+        sample_knots = np.arange(n, dtype=np.float64) * 30.0
+        time_knots = np.arange(n, dtype=np.float64) * 0.001
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            lfpack.write_sync_attrs(grp, sample_knots, time_knots)
+            np.testing.assert_array_equal(grp["sync_samples"][:], sample_knots)
+            np.testing.assert_array_equal(grp["sync_times"][:], time_knots)
+
+    def test_rewrite_with_different_length_overwrites_dataset(self):
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            lfpack.write_sync_attrs(grp, [0.0, 10.0, 20.0], [0.0, 0.041, 0.081])
+            new_samples = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+            new_times = np.array([0.0, 0.02, 0.041, 0.061, 0.081])
+            lfpack.write_sync_attrs(grp, new_samples, new_times)
+            np.testing.assert_array_equal(grp["sync_samples"][:], new_samples)
+            np.testing.assert_array_equal(grp["sync_times"][:], new_times)
 
     def test_rejects_too_few_knots(self):
         with h5py.File(self.h5, "w") as f:

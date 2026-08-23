@@ -16,7 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falls back to the derived affine outside it (`interp1d` with no extrapolation, rather
   than the less stable slope of the two outermost knots). New `lfpack.write_sync_attrs` /
   `lfpack.clear_sync_attrs` (`src/lfpack/_sync.py`) write/clear both tiers together and
-  validate the knots (>=2 points, strictly increasing, all-finite).
+  validate the knots (>=2 points, strictly increasing, all-finite). `sync_samples`/
+  `sync_times` are stored as gzip+shuffle child datasets of `meta`, not attrs — a
+  `type='exact'` fit's knots (every raw pulse, verbatim) can run to tens of thousands of
+  points, well past HDF5's per-attribute object-header-message size limit.
+- Added `docs/how-to/write-your-own-file.qmd`, documenting the two sync styles (linear
+  affine vs. piecewise knots) and moving/fixing the multi-recording write example that
+  used to live in `how-to/multi-recording.qmd`.
 
 ### Fixed
 - `saturation_times()` now calls the same sample→time conversion as `.times` instead of

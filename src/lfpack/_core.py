@@ -38,6 +38,7 @@ import pywt
 import scipy.signal  # noqa: F401
 import spikeglx as _spikeglx
 from ibldsp import cadzow as _cadzow
+from scipy.interpolate import interp1d
 from tqdm import tqdm
 
 _WP_WAVELET = "db4"
@@ -1208,6 +1209,17 @@ class LFPackReader(_spikeglx.Reader):
             self._fs_sync = float(_v) if not np.isnan(_v) else None
             _v = attrs.get("t0_sync", np.nan)
             self._t0_sync = float(_v) if not np.isnan(_v) else None
+            sync_samples = attrs.get("sync_samples")
+            sync_times = attrs.get("sync_times")
+            if sync_samples is not None and sync_times is not None:
+                self._sync_interp = interp1d(
+                    np.asarray(sync_samples, dtype=np.float64),
+                    np.asarray(sync_times, dtype=np.float64),
+                    bounds_error=False,
+                    fill_value=np.nan,
+                )
+            else:
+                self._sync_interp = None
             self._compress_chunk = int(attrs["compress_chunk"])
             self._n_chunks = len(f[chunks_path])
             self.sglx_meta = _json.loads(attrs["sglx_meta"])
@@ -1451,8 +1463,10 @@ class LFPackReader(_spikeglx.Reader):
 
         Converts ``start_sample``/``stop_sample`` (raw-rate, recording-aligned) to
         ``start_time``/``stop_time`` (session-clock seconds, matching ``times``) via the
-        same sample-rate ratio and ``t0``/``fs`` used everywhere else in the reader —
-        never divide the raw samples by a raw sample rate by hand.
+        same sample-rate ratio and ``_sample_to_time`` used by ``times`` — never divide
+        the raw samples by a raw sample rate by hand, and never re-derive the affine
+        formula independently of ``.times`` (it would silently diverge on any scale
+        with real non-linear sync structure).
 
         Returns
         -------
@@ -1464,9 +1478,8 @@ class LFPackReader(_spikeglx.Reader):
             df["start_time"] = df["stop_time"] = np.array([], dtype=float)
             return df
         ratio = self._fs / self.saturation_summary.get("fs", self._fs)
-        t0 = self._t0_sync if self._t0_sync is not None else 0.0
-        df["start_time"] = t0 + df["start_sample"] * ratio / self.fs
-        df["stop_time"] = t0 + df["stop_sample"] * ratio / self.fs
+        df["start_time"] = self._sample_to_time(df["start_sample"].to_numpy() * ratio)
+        df["stop_time"] = self._sample_to_time(df["stop_sample"].to_numpy() * ratio)
         return df
 
     @staticmethod
@@ -1538,6 +1551,43 @@ class LFPackReader(_spikeglx.Reader):
         """LFP sample rate in Hz, sync-corrected when sync data is present."""
         return self._fs_sync if self._fs_sync is not None else self._fs
 
+    def _sample_to_time(self, n):
+        """Convert sample index/indices (this scale's native units) to session-clock time.
+
+        Tier 1 (non-linear): when ALF sync knots are stored (``sync_samples``/
+        ``sync_times``), interpolate through them.  Samples outside the
+        knot-covered range come back NaN from ``interp1d`` and are replaced
+        below by the derived affine, so extrapolation always uses the globally
+        stable least-squares fit rather than the unstable slope implied by the
+        two outermost knots.
+        Tier 2 (legacy affine) / tier 3 (native): ``t0_sync + n / fs`` when no
+        knots are stored — either an older archive with only the scalar sync,
+        or no sync at all (``t0_sync`` then defaults to 0, ``fs`` to nominal).
+
+        This is the single place both ``.times`` and ``saturation_times()``
+        compute sample→time, so they can never diverge.
+
+        Parameters
+        ----------
+        n : int, float, or ndarray
+            Sample index in this scale's native sample-index units.
+
+        Returns
+        -------
+        float or ndarray
+            Matches the scalar/array-ness of `n`.
+        """
+        t0 = self._t0_sync if self._t0_sync is not None else 0.0
+        n_arr = np.asarray(n, dtype=np.float64)
+        affine = t0 + n_arr / self.fs
+        if self._sync_interp is None:
+            t = affine
+        else:
+            interp = np.asarray(self._sync_interp(n_arr))
+            nan_mask = np.isnan(interp)
+            t = np.where(nan_mask, affine, interp) if nan_mask.any() else interp
+        return float(t) if n_arr.ndim == 0 else t
+
     @property
     def times(self):
         """Session-clock timestamps in seconds for every LFP sample.
@@ -1545,18 +1595,17 @@ class LFPackReader(_spikeglx.Reader):
         Returns
         -------
         numpy.ndarray of float64, shape (ns,)
-            ``t0 + np.arange(ns) / fs`` where ``t0`` and ``fs`` are the
-            sync-corrected values stored during compression.  When no sync data
-            is present, ``t0`` defaults to 0 and ``fs`` to the nominal rate, so
-            ``times`` still gives a valid relative time axis.
+            ``_sample_to_time(np.arange(ns))`` — non-linear ALF sync knots when
+            present (precise inside the pulse-covered window, stable affine
+            extrapolation beyond it), else the affine ``t0 + n / fs`` using the
+            sync-corrected (or nominal) values stored during compression.
 
         Notes
         -----
         Use this array to align LFP traces with trial events or spike times that
         share the same session clock (e.g. ``trials['stimOn_times']`` from ONE).
         """
-        t0 = self._t0_sync if self._t0_sync is not None else 0.0
-        return t0 + np.arange(self._ns) / self.fs
+        return self._sample_to_time(np.arange(self._ns))
 
     @property
     def ns(self):

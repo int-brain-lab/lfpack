@@ -507,6 +507,40 @@ class TestLFPackReaderAPI(unittest.TestCase):
         scales = lfpack.LFPackReader.scales(self.h5, "r")
         self.assertEqual(scales, [0])
 
+    def test_times_with_nonlinear_sync_knots(self):
+        """times interpolates through real (non-affine) ALF sync knots inside their range."""
+        sample_knots = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+        time_knots = sample_knots / 250.0 + 5e-7 * sample_knots**2  # quadratic warp
+        with h5py.File(self.h5, "a") as f:
+            lfpack.write_sync_attrs(f["r/00/meta"], sample_knots, time_knots)
+        sr = lfpack.LFPackReader(self.h5)
+        t = sr.times
+        # exact at the knots themselves
+        for n, t_expected in zip(sample_knots, time_knots):
+            self.assertAlmostEqual(float(t[int(n)]), t_expected, places=9)
+        # interior, off-knot sample must match linear interpolation, not the derived affine
+        expected_150 = float(np.interp(150.0, sample_knots, time_knots))
+        self.assertAlmostEqual(float(t[150]), expected_150, places=9)
+        affine_150 = sr.t0 + 150.0 / sr.fs
+        self.assertFalse(np.isclose(expected_150, affine_150, atol=1e-6))
+        self.assertAlmostEqual(float(t[150]), expected_150, places=9)
+
+    def test_times_extrapolation_falls_back_to_affine(self):
+        """Samples outside the knot-covered range use the derived affine, never NaN."""
+        sample_knots = np.array([0.0, 100.0, 200.0, 300.0, 400.0])
+        time_knots = sample_knots / 250.0 + 5e-7 * sample_knots**2
+        with h5py.File(self.h5, "a") as f:
+            lfpack.write_sync_attrs(f["r/00/meta"], sample_knots, time_knots)
+        sr = lfpack.LFPackReader(self.h5)
+        self.assertGreater(self.NS, 400)  # ensure .times reaches past the knot range
+        t = sr.times
+        self.assertFalse(np.any(np.isnan(t[401:])))
+        for n in (401, self.NS - 1):
+            expected = sr.t0 + n / sr.fs
+            self.assertAlmostEqual(float(t[n]), expected, places=9)
+        # scalar input takes the same path
+        self.assertAlmostEqual(sr._sample_to_time(self.NS - 1), sr.t0 + (self.NS - 1) / sr.fs, places=9)
+
 
 class TestMergeH5(unittest.TestCase):
     """Tests for merge_h5: multi-recording aggregation without re-compression."""
@@ -894,6 +928,86 @@ class TestSaturationTable(unittest.TestCase):
         df = sr.saturation_times()
         self.assertTrue(df.empty)
         self.assertEqual(list(df.columns), ["start_sample", "stop_sample", "start_time", "stop_time"])
+
+    def test_saturation_times_matches_nonlinear_knot(self):
+        """saturation_times must route through the same knot interpolation as .times.
+
+        Regression test for the bug where saturation_times() computed
+        ``t0 + sample * ratio / fs`` inline instead of calling ``_sample_to_time``,
+        which would silently diverge from ``.times`` on a scale with real non-linear
+        sync structure.
+        """
+        h5 = self._write(self.tmp_path / "nl.h5")
+        sample_knots = np.array([0.0, 200.0, 400.0, 600.0, 800.0, 1000.0])
+        time_knots = sample_knots / self.FS_DEC + 2e-6 * sample_knots**2  # real curvature
+        with h5py.File(h5, "a") as f:
+            lfpack.write_sync_attrs(f["rec_a/00/meta"], sample_knots, time_knots)
+        sr = lfpack.LFPackReader(h5)
+        df = sr.saturation_times()
+
+        ratio = self.FS_DEC / self.FS_RAW
+        dec_sample0 = self.intervals[0, 0] * ratio  # 100.0, inside the [0, 200] knot span
+        expected = float(np.interp(dec_sample0, sample_knots, time_knots))
+        self.assertAlmostEqual(df["start_time"].iloc[0], expected, places=9)
+        # the naive affine-only formula must NOT match — proves the fix actually
+        # routes through the non-linear interpolation rather than the derived affine
+        affine_only = sr.t0 + dec_sample0 / sr.fs
+        self.assertFalse(np.isclose(expected, affine_only, atol=1e-6))
+        # and saturation_times must agree with sr._sample_to_time (same code path)
+        self.assertAlmostEqual(df["start_time"].iloc[0], float(sr._sample_to_time(dec_sample0)), places=12)
+
+
+class TestSyncAttrs(unittest.TestCase):
+    """write_sync_attrs / clear_sync_attrs round-trip and validation."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.h5 = Path(self.tmp.name) / "sync_attrs.h5"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_roundtrip(self):
+        sample_knots = np.array([0.0, 10.0, 25.0, 40.0])
+        time_knots = np.array([0.0, 0.041, 0.101, 0.162])
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            t0_sync, fs_sync = lfpack.write_sync_attrs(grp, sample_knots, time_knots)
+            np.testing.assert_array_equal(grp.attrs["sync_samples"], sample_knots)
+            np.testing.assert_array_equal(grp.attrs["sync_times"], time_knots)
+            self.assertAlmostEqual(grp.attrs["t0_sync"], t0_sync)
+            self.assertAlmostEqual(grp.attrs["fs_sync"], fs_sync)
+            self.assertIsInstance(t0_sync, float)
+            self.assertIsInstance(fs_sync, float)
+
+            lfpack.clear_sync_attrs(grp)
+            for key in lfpack.SYNC_ATTRS:
+                self.assertNotIn(key, grp.attrs)
+            lfpack.clear_sync_attrs(grp)  # no-op when already absent
+
+    def test_rejects_too_few_knots(self):
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            with self.assertRaises(ValueError):
+                lfpack.write_sync_attrs(grp, [0.0], [0.0])
+
+    def test_rejects_non_monotonic_samples(self):
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            with self.assertRaises(ValueError):
+                lfpack.write_sync_attrs(grp, [0.0, 5.0, 5.0, 10.0], [0.0, 0.02, 0.021, 0.04])
+
+    def test_rejects_non_monotonic_times(self):
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            with self.assertRaises(ValueError):
+                lfpack.write_sync_attrs(grp, [0.0, 5.0, 10.0], [0.0, 0.02, 0.019])
+
+    def test_rejects_non_finite(self):
+        with h5py.File(self.h5, "w") as f:
+            grp = f.create_group("meta")
+            with self.assertRaises(ValueError):
+                lfpack.write_sync_attrs(grp, [0.0, 5.0, np.nan], [0.0, 0.02, 0.04])
 
 
 if __name__ == "__main__":

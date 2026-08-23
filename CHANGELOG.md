@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Non-linear sync support: `sync_samples`/`sync_times` — the raw ALF sync knot pairs
+  (sample index <-> time), stored verbatim per scale — alongside the existing
+  `t0_sync`/`fs_sync` scalars, which are now always a least-squares affine derived from
+  the knots (or the legacy scalar, for archives predating this change). `LFPackReader`
+  interpolates through the knots for `.times`/`saturation_times()` inside their range and
+  falls back to the derived affine outside it (`interp1d` with no extrapolation, rather
+  than the less stable slope of the two outermost knots). New `lfpack.write_sync_attrs` /
+  `lfpack.clear_sync_attrs` (`src/lfpack/_sync.py`) write/clear both tiers together and
+  validate the knots (>=2 points, strictly increasing, all-finite).
+
+### Fixed
+- `saturation_times()` now calls the same sample→time conversion as `.times` instead of
+  duplicating the affine formula inline, so the two could never silently diverge on a
+  scale with real non-linear sync structure.
+
 ## [0.3.0] - 2026-07-25
 
 ### Added

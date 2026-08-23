@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-23
+
 ### Added
 - Non-linear sync support: `sync_samples`/`sync_times` — the raw ALF sync knot pairs
   (sample index <-> time), stored verbatim per scale — alongside the existing

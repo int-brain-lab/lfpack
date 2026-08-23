@@ -40,19 +40,4 @@ Higher scale indices correspond to progressively coarser spatial representations
 
 ## Write a multi-recording file
 
-Use `compress_to_h5` (not `compress_bin_to_h5`) and call it once per recording, passing the same output path each time:
-
-```python
-from lfpack import compress_to_h5
-import numpy as np
-
-# First probe
-data_a = np.load("probe00_lfp.npy")   # (nc, ns) float32
-compress_to_h5(data_a, fs=250.0, h5_file="session.lf.h5", recording="probe00")
-
-# Second probe — appended to the same file
-data_b = np.load("probe01_lfp.npy")
-compress_to_h5(data_b, fs=250.0, h5_file="session.lf.h5", recording="probe01")
-```
-
-See [`compress_to_h5`](../reference/compress_to_h5.qmd) for the full parameter list.
+See [how to write your own lfpack file](write-your-own-file.qmd#write-a-multi-recording-file).

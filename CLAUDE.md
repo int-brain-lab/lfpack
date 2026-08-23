@@ -28,7 +28,7 @@ quarto preview docs/
 
 ## Architecture
 
-Nearly all code lives in `src/lfpack/_core.py` (~1000 lines). The public API is re-exported from `src/lfpack/__init__.py`.
+Nearly all code lives in `src/lfpack/_core.py` (~1700 lines). Non-linear sync knot storage (`write_sync_attrs`/`clear_sync_attrs`) lives in the small `src/lfpack/_sync.py` module. The public API is re-exported from `src/lfpack/__init__.py`.
 
 ### Compression pipeline (`compress_bin_to_h5`)
 
@@ -62,12 +62,28 @@ Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge t
    │               # written once per recording (scale-independent). attrs: fs, ns_total,
    │               # n_saturated_samples, saturated_fraction, detection params, muted
    └─ <scale_2digit>/
-      ├─ meta         # nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
+      ├─ meta         # attrs: nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
+      │               # optional child datasets: sync_samples, sync_times (gzip+shuffle)
       └─ chunks/
          └─ <i>/      # U_scaled, vh_indices, vh_values + attrs
 ```
 
 The `saturation` node sits at recording level (not under a scale) because it describes the raw recording, not a codec pyramid level; `merge_h5` copies it automatically. Legacy flat layout (meta at root) is still readable for backwards compatibility.
+
+`fs_sync`/`t0_sync` are always plain scalar attrs — a least-squares affine (derived from
+`sync_samples`/`sync_times` when present, else the legacy scalar sync, else the nominal
+rate) — so downstream consumers reading `meta.attrs` directly (e.g. `qc_report.py`) and
+`LFPackReader.t0`/`.fs` never see anything but a scalar. `sync_samples`/`sync_times`
+(float64, optional) are the raw ALF sync knot pairs (sample index <-> time) in this
+scale's own native sample-index units, written verbatim with no re-fitting; `LFPackReader`
+interpolates through them for `.times`/`saturation_times()` inside their range and falls
+back to the derived affine outside it. Stored as **child datasets** of `meta`, not attrs
+like everything else here — a `type='exact'` fit keeps every raw pulse verbatim, which can
+run to tens of thousands of knots and overflows HDF5's per-attribute object-header-message
+size limit (`OSError: object header message is too large`, hit at ~38k knots in production).
+Write/clear both tiers together via `lfpack.write_sync_attrs(meta_group, sample_knots,
+time_knots)` / `lfpack.clear_sync_attrs(meta_group)` (in `src/lfpack/_sync.py`) rather than
+setting them by hand.
 
 ### `LFPackReader`
 

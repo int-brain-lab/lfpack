@@ -74,6 +74,7 @@ ev = viewephys(traces.T, fs=sr.fs, title="LFP decompressed")
 
 ## What's next?
 
+- [How to write your own lfpack file](../how-to/write-your-own-file.qmd) — write from your own LFP data instead of a raw SpikeGLX binary
 - [How to use binned-channel reads](../how-to/binned-reads.qmd) — reduce spatial resolution at read time
 - [Explanation: Compression pipeline](../explanation/pipeline.qmd) — understand what each stage does
 - [API reference](../reference/index.qmd) — full parameter documentation

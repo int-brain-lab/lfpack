@@ -5,6 +5,14 @@ title: "How to access the IBL Brain-Wide Map LFP dataset"
 The IBL Brain-Wide Map (BWM) LFP dataset is distributed as a 16GB `.h5` file
 containing 699 individual recordings of 384 channels each.
 
+## Browse online
+
+**[lfpack.internationalbrainlab.org](https://lfpack.internationalbrainlab.org/app)**
+hosts a live web viewer over the full dataset — no download or setup required.
+Pick a recording (searchable by `pid`) or filter by brain region (acronym or
+name, e.g. `VISp` or `Isocortex` — matching that region or any of its
+descendants in the Allen hierarchy), then pan/zoom the trace view and adjust
+gain. This is the fastest way to browse before writing any code.
 
 ::: {.callout-warning}
 ## Known Dataset limitations

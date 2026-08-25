@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `LFPackReader` accepts an already-open binary file-like object (e.g. an `s3fs`
+  handle) as `h5_file`, not just a path — enables reading an archive directly off
+  remote storage without a local mirror.
+
 ## [0.4.0] - 2026-08-23
 
 ### Added

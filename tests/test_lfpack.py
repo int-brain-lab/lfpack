@@ -298,6 +298,16 @@ class TestLFPackReaderAPI(unittest.TestCase):
         self.assertFalse(sr.is_open)
         sr.close()  # idempotent
 
+    def test_read_from_file_like_object(self):
+        """LFPackReader accepts an open binary file-like object (e.g. an s3fs handle)."""
+        sr_path = lfpack.LFPackReader(self.h5)
+        data_path, _ = sr_path.read(slice(0, 100))
+        with open(self.h5, "rb") as fh:
+            sr_obj = lfpack.LFPackReader(fh)
+            data_obj, _ = sr_obj.read(slice(0, 100))
+            sr_obj.close()
+        np.testing.assert_array_equal(data_path, data_obj)
+
     def test_read_raises_when_closed(self):
         sr = lfpack.LFPackReader(self.h5)
         sr.close()

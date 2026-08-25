@@ -1146,8 +1146,10 @@ class LFPackReader(_spikeglx.Reader):
 
     Parameters
     ----------
-    h5_file : path-like
-        HDF5 archive produced by compress_to_h5.
+    h5_file : path-like or file-like
+        HDF5 archive produced by compress_to_h5, or an already-open binary file-like
+        object (e.g. an ``s3fs`` handle) for reading a remote archive without a
+        local mirror. h5py reads either transparently.
     recording : str or None
         Recording key (top-level group name).  Auto-detected when the file contains
         exactly one recording; raises ValueError for multi-recording files.
@@ -1174,7 +1176,7 @@ class LFPackReader(_spikeglx.Reader):
     def __init__(self, h5_file, recording=None, scale=0, bin_channels=1):
         import h5py
 
-        self._h5_file = Path(h5_file)
+        self._h5_file = h5_file if hasattr(h5_file, "read") else Path(h5_file)
         self._h5 = None
         self._raw = None  # is_open sentinel (None → closed)
         self._geometry = None

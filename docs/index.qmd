@@ -38,11 +38,11 @@ sr = LFPackReader("recording.lf.h5")
 traces = sr[0:1000]      # (1000, n_channels) float32, volts
 ```
 
-## Benchmark — IBL PID `dab512bd` (NP1, 61 min, 384 ch, original: 6.5 GB)
+## Benchmark — IBL PID `dab512bd` (NP1, 61 min, 384 ch, original: 7.0 GB)
 
-| Parameter set | ε (SVD) | α (WP) | File size | CR (median) | RMSE median | RMSE p95 |
+| Parameter set | ε (SVD) | α (WP) | File size | CR | RMSE median | RMSE p95 |
 |---|---|---|---|---|---|---|
-| **default** | 150 | 28 | 19 MB | **350×** | 24 µV | 27 µV |
-| **aggressive** | 450 | 96 | 9 MB | **745×** | 49 µV | 54 µV |
+| **mild** | 100 | 14 | 26 MB | **270×** | 15 µV | 17 µV |
+| **default** | 150 | 28 | 15 MB | **461×** | 24 µV | 26 µV |
 
-![LFP voltage density — original · Cadzow · default · aggressive](figures/density_lfp_dab512bd.png)
+![LFP voltage density — original · Cadzow · default · mild](figures/2026-09-05_lfp_density_voltage_dab512bd.png)

@@ -24,13 +24,13 @@ gain. This is the fastest way to browse before writing any code.
   (spanning 4 sessions) due to a session-level sync data-quality issue upstream; `sr.t0`
   returns `NaN` for these. See [lfpack#8](https://github.com/int-brain-lab/lfpack/issues/8).
 - **High-frequency roll-off** — the SVD + wavelet-packet codec trades off power above
-  roughly 20-30 Hz for compression ratio, more so at the aggressive tier. See the PSD
-  comparison below.
+  roughly 20-30 Hz for compression ratio, more so at the default tier than the mild tier.
+  See the PSD comparison below.
 - **Low-frequency channel-to-channel mismatch** — per-channel impedance/analog-filter
   differences show up as amplitude outliers at low frequencies (below 1.5 Hz) and are not fully
   corrected by the current pre-processing pipeline.
 
-![Average PSD across compression tiers for a representative recording — high frequencies are increasingly attenuated as compression ratio (CR) rises from cadzow-only to default (119×) to aggressive (254×).](../figures/bwm_compression_hf_rolloff.png){.lightbox}
+![Average PSD across compression tiers for a representative recording — high frequencies are increasingly attenuated as compression ratio (CR) rises from cadzow-only to mild (270×) to default (461×).](../figures/2026-09-05_bwm_compression_hf_rolloff.png){.lightbox}
 :::
 
 ::: {.callout-important}
@@ -113,6 +113,22 @@ s3_download_file(
 
 `s3_download_file` defaults to the IBL public bucket, shows a tqdm progress bar,
 and skips the download if the local file already has the correct size.
+
+### Mild tier (higher fidelity)
+
+A higher-fidelity `mild` tier (ε=100, α=14 — see [Benchmark gallery](../explanation/gallery.qmd))
+is also published for the BWM cohort, at roughly 240× rather than 430× compression. Same
+format, same 699 recordings — just a different accuracy/size trade-off. Not yet wired into
+`ibl-ai-agent`'s `download_datasets.py --lfp` flag; fetch it directly:
+
+```python
+from one.remote.aws import s3_download_file
+
+s3_download_file(
+    source="resources/ibl-agent-data/lf_compressed_mild_all_bwm.h5",
+    destination="lf_compressed_mild_all_bwm.h5",
+)
+```
 
 ## Session-clock times
 

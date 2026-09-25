@@ -26,6 +26,40 @@ def _synthetic_lfp(nc=32, ns=500):
     return (spatial @ temporal + noise).astype(np.float32)
 
 
+def _write_v1_copy(src_h5, dst_h5):
+    """Rewrite every scale of a format-2 archive as format-1 per-chunk groups."""
+    from lfpack import _container, _legacy
+
+    with h5py.File(src_h5, "r") as src, h5py.File(dst_h5, "w") as dst:
+        for rec in src:
+            for name, item in src[rec].items():
+                if not isinstance(item, h5py.Group):
+                    src[rec].copy(name, dst.require_group(rec))
+                    continue
+                scale = dst.require_group(f"{rec}/{name}")
+                src.copy(f"{rec}/{name}/meta", scale)
+                del scale["meta"].attrs["format_version"]
+                reader = _container.CodecReader(item)
+                results = []
+                for ci in range(len(reader)):
+                    c = reader.chunk(ci)
+                    flat = c["Vh_hat"].ravel()
+                    idx = np.flatnonzero(flat).astype(np.int32)
+                    row = reader.table[ci]
+                    results.append(
+                        dict(
+                            U_scaled=c["U_scaled"],
+                            vh_indices=idx,
+                            vh_values=flat[idx],
+                            vh_shape=c["Vh_hat"].shape,
+                            rmse=row["rmse"],
+                            **{k: c[k] for k in ("ns_original", "ns_extended", "left_overlap", "epsilon", "alpha")},
+                            **{k: c[k] for k in ("cr_svd", "cr_wp", "cr_total")},
+                        )
+                    )
+                _legacy.write_chunks_v1(scale, results)
+
+
 class TestLfpack(unittest.TestCase):
     def setUp(self):
         self.data = _synthetic_lfp()
@@ -376,14 +410,65 @@ class TestLFPackReaderAPI(unittest.TestCase):
 
     def test_legacy_format(self):
         """LFPackReader reads legacy flat layout (meta/chunks at root) and recordings() returns []."""
+        v1 = self.tmp_path / "v1.h5"
+        _write_v1_copy(self.h5, v1)
         leg = self.tmp_path / "legacy.h5"
-        with h5py.File(self.h5, "r") as src, h5py.File(leg, "w") as dst:
+        with h5py.File(v1, "r") as src, h5py.File(leg, "w") as dst:
             src.copy("r/00/meta", dst, name="meta")
             src.copy("r/00/chunks", dst, name="chunks")
         self.assertEqual(lfpack.LFPackReader.recordings(leg), [])
         sr = lfpack.LFPackReader(leg)
         data, _ = sr.read_samples(0, self.NS)
         self.assertEqual(data.shape, (self.NS, self.NC))
+
+    def test_format_v1_reads_like_v2(self):
+        """A format-1 per-chunk-group archive decodes to the same samples as format 2."""
+        v1 = self.tmp_path / "v1.h5"
+        _write_v1_copy(self.h5, v1)
+        a, _ = lfpack.LFPackReader(v1).read_samples(0, self.NS)
+        b, _ = lfpack.LFPackReader(self.h5).read_samples(0, self.NS)
+        np.testing.assert_array_equal(a, b)
+
+    def test_upgrade_h5(self):
+        """upgrade_h5 turns format 1 into format 2 without changing the decoded samples."""
+        v1 = self.tmp_path / "v1.h5"
+        _write_v1_copy(self.h5, v1)
+        v2 = lfpack.upgrade_h5(v1, self.tmp_path / "v2.h5")
+        with h5py.File(v2, "r") as f:
+            self.assertEqual(int(f["r/00/meta"].attrs["format_version"]), 2)
+            self.assertIn("codec", f["r/00"])
+            self.assertNotIn("chunks", f["r/00"])
+        a, _ = lfpack.LFPackReader(v1).read_samples(0, self.NS)
+        b, _ = lfpack.LFPackReader(v2).read_samples(0, self.NS)
+        np.testing.assert_array_equal(a, b)
+
+    def test_random_access_matches_full_read(self):
+        """A read straddling a chunk boundary equals the same span of a full read."""
+        sr = lfpack.LFPackReader(self.h5)
+        full, _ = sr.read_samples(0, self.NS)
+        part, _ = sr.read_samples(200, 300)
+        np.testing.assert_array_equal(part, full[200:300])
+
+    def test_central_slot_mask_is_lossless(self):
+        """Zeroing the WP slots flagged as guard-band-only leaves the central samples unchanged."""
+        import pywt
+
+        from lfpack import _container
+
+        ns_ext, lo, ns = 320, 32, 256
+        mask = _container.central_slot_mask(ns_ext, lo, ns, "db4", 5)
+        self.assertLess(mask.sum(), mask.size)
+        coeffs = np.random.default_rng(0).standard_normal(mask.size)
+
+        def synth(c):
+            wp = pywt.WaveletPacket(data=np.zeros(ns_ext), wavelet="db4", maxlevel=5)
+            offset = 0
+            for node in wp.get_level(5, "natural"):
+                node.data = c[offset : offset + len(node.data)]
+                offset += len(node.data)
+            return wp.reconstruct(update=False)[:ns_ext][lo : lo + ns]
+
+        np.testing.assert_allclose(synth(coeffs * mask), synth(coeffs), rtol=0, atol=1e-12)
 
     def _annotate_h5(self):
         """Write brain-location attrs to self.h5 and return the injected arrays."""
@@ -589,7 +674,7 @@ class TestMergeH5(unittest.TestCase):
         self.assertEqual(sorted(lfpack.LFPackReader.recordings(merged)), ["rec_a", "rec_b"])
 
     def test_hierarchy_preserved(self):
-        """The full /<rec>/00/meta and /<rec>/00/chunks/<i>/ structure survives the copy."""
+        """The full /<rec>/00/meta and /<rec>/00/codec/ structure survives the copy."""
         h5a = self._make_h5("rec_a")
         merged = self.tmp_path / "merged.h5"
         lfpack.merge_h5([h5a], merged)
@@ -603,14 +688,13 @@ class TestMergeH5(unittest.TestCase):
                 self.assertIn(attr, meta.attrs)
             self.assertEqual(int(meta.attrs["nc"]), self.NC)
             self.assertEqual(int(meta.attrs["ns_total"]), self.NS)
-            # at least one chunk with the expected datasets
-            chunks = f["rec_a/00/chunks"]
-            self.assertGreater(len(chunks), 0)
-            chunk0 = chunks["0"]
-            for ds in ("U_scaled", "vh_indices", "vh_values"):
-                self.assertIn(ds, chunk0)
-            for attr in ("ns_original", "vh_shape", "cr_total", "rmse"):
-                self.assertIn(attr, chunk0.attrs)
+            # flat codec datasets and a non-empty chunk table
+            codec = f["rec_a/00/codec"]
+            for ds in ("chunk_table", "u_values", "vh_deltas", "vh_values"):
+                self.assertIn(ds, codec)
+            self.assertGreater(codec["chunk_table"].shape[0], 0)
+            for field in ("ns_original", "rank", "n_kept", "cr_total", "rmse"):
+                self.assertIn(field, codec["chunk_table"].dtype.names)
 
     def test_merge_h5_libver(self):
         """Merged file must not use libver='latest' (moving target — breaks cross-version reads)."""

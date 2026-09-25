@@ -41,6 +41,8 @@ from ibldsp import cadzow as _cadzow
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 
+from lfpack import _container
+
 _WP_WAVELET = "db4"
 _WP_MAXLEVEL = 5
 # HDF5 format version used for all files written by lfpack.
@@ -569,17 +571,14 @@ def compress_to_h5(
     are stored, eliminating wavelet-reconstruction boundary artefacts.  Decompressed
     chunks are concatenated without overlap during reading.
 
-    HDF5 layout
-    -----------
+    HDF5 layout (format 2)
+    ----------------------
     /<recording>/<scale_str>/meta        attrs: nc, ns_total, fs, compress_chunk,
                                                 compress_overlap, epsilon, alpha,
-                                                sglx_meta (JSON), geometry_x, geometry_y
-    /<recording>/<scale_str>/chunks/<i>/ datasets: U_scaled (nc, r),
-                                                   vh_indices (n_kept,) int32,
-                                                   vh_values (n_kept,) float32
-                                         attrs: ns_original, ns_extended, left_overlap,
-                                                vh_shape, epsilon, alpha, cr_svd, cr_wp,
-                                                cr_total, rmse
+                                                format_version, sglx_meta (JSON),
+                                                geometry_x, geometry_y
+    /<recording>/<scale_str>/codec/      datasets: chunk_table, u_values, vh_deltas,
+                                                   vh_values (see ``lfpack._container``)
 
     /<recording>/saturation              dataset (n_intervals, 2) int64 of
                                          [start_sample, stop_sample] at the raw LFP rate,
@@ -648,7 +647,6 @@ def compress_to_h5(
 
     out_h5 = Path(out_h5)
     n_chunks = int(np.ceil(ns / chunk))
-    total_cr = 0.0
 
     from tqdm import tqdm
 
@@ -697,28 +695,13 @@ def compress_to_h5(
             for k, v in (saturation_attrs or {}).items():
                 sat_ds.attrs[k] = v
 
-        cg = f.create_group(f"{root}/chunks")
         from joblib import Parallel, delayed
 
         results = Parallel(n_jobs=n_jobs, backend="loky")(
             delayed(_compress_chunk_worker)(job) for job in tqdm(jobs, desc="Compress", unit="chunk")
         )
-        for ci, r in enumerate(results):
-            grp = cg.create_group(str(ci))
-            grp.create_dataset("U_scaled", data=r["U_scaled"], compression="gzip", shuffle=True)
-            grp.create_dataset("vh_indices", data=r["vh_indices"], compression="gzip", shuffle=True)
-            grp.create_dataset("vh_values", data=r["vh_values"], compression="gzip", shuffle=True)
-            grp.attrs["vh_shape"] = r["vh_shape"]
-            grp.attrs["ns_original"] = r["ns_original"]
-            grp.attrs["ns_extended"] = r["ns_extended"]
-            grp.attrs["left_overlap"] = r["left_overlap"]
-            grp.attrs["epsilon"] = r["epsilon"]
-            grp.attrs["alpha"] = r["alpha"]
-            grp.attrs["cr_svd"] = r["cr_svd"]
-            grp.attrs["cr_wp"] = r["cr_wp"]
-            grp.attrs["cr_total"] = r["cr_total"]
-            grp.attrs["rmse"] = r["rmse"]
-            total_cr += r["cr_total"]
+        _container.write_codec(f[root], results, _WP_WAVELET, _WP_MAXLEVEL)
+        total_cr = sum(r["cr_total"] for r in results)
 
     print(f"Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}")
     return out_h5
@@ -1178,6 +1161,7 @@ class LFPackReader(_spikeglx.Reader):
 
         self._h5_file = h5_file if hasattr(h5_file, "read") else Path(h5_file)
         self._h5 = None
+        self._codec = None
         self._raw = None  # is_open sentinel (None → closed)
         self._geometry = None
         self.ignore_warnings = False
@@ -1202,7 +1186,6 @@ class LFPackReader(_spikeglx.Reader):
                     raise KeyError(f"Recording '{recording}' not found. Available: {root_keys}")
                 self._root = f"{recording}/{scale:02d}"
             meta_path = f"{self._root}/meta" if self._root else "meta"
-            chunks_path = f"{self._root}/chunks" if self._root else "chunks"
             meta_group = f[meta_path]
             attrs = meta_group.attrs
             self._nc = int(attrs["nc"])
@@ -1228,7 +1211,8 @@ class LFPackReader(_spikeglx.Reader):
             else:
                 self._sync_interp = None
             self._compress_chunk = int(attrs["compress_chunk"])
-            self._n_chunks = len(f[chunks_path])
+            self._format_version = int(attrs.get("format_version", 1))
+            self._n_chunks = len(self._codec_reader(f))
             self.sglx_meta = _json.loads(attrs["sglx_meta"])
             self._geometry = {
                 "x": attrs["geometry_x"][:].astype(np.float32),
@@ -1528,16 +1512,27 @@ class LFPackReader(_spikeglx.Reader):
                 raise KeyError(f"Recording '{recording}' not found")
             return sorted(int(k) for k in f[recording].keys() if k.isdigit())
 
+    def _codec_reader(self, f):
+        """Random-access chunk reader matching the file's format version."""
+        scale_group = f[self._root] if self._root else f
+        if self._format_version == 1:
+            from lfpack._legacy import ChunkGroupReader
+
+            return ChunkGroupReader(scale_group["chunks"])
+        return _container.CodecReader(scale_group)
+
     def open(self):
         import h5py
 
         self._h5 = h5py.File(self._h5_file, "r")
+        self._codec = self._codec_reader(self._h5)
         self._raw = True  # non-None sentinel so base-class is_open returns True
 
     def close(self):
         if self._h5 is not None:
             self._h5.close()
             self._h5 = None
+        self._codec = None
         self._raw = None
 
     @property
@@ -1658,25 +1653,7 @@ class LFPackReader(_spikeglx.Reader):
 
         pieces = []
         for ci in range(first_chunk, last_chunk + 1):
-            chunk_path = f"{self._root}/chunks/{ci}" if self._root else f"chunks/{ci}"
-            grp = self._h5[chunk_path]
-            ns_orig = int(grp.attrs["ns_original"])
-            # Reconstruct dense Vh_hat from sparse storage
-            vh_shape = tuple(int(x) for x in grp.attrs["vh_shape"])
-            Vh_hat = np.zeros(vh_shape, dtype=np.float32)
-            Vh_hat.ravel()[grp["vh_indices"][:]] = grp["vh_values"][:]
-            c = LFPCompressed(
-                U_scaled=grp["U_scaled"][:],
-                Vh_hat=Vh_hat,
-                ns_original=ns_orig,
-                epsilon=float(grp.attrs["epsilon"]),
-                alpha=float(grp.attrs["alpha"]),
-                cr_svd=float(grp.attrs["cr_svd"]),
-                cr_wp=float(grp.attrs["cr_wp"]),
-                cr_total=float(grp.attrs["cr_total"]),
-                left_overlap=int(grp.attrs.get("left_overlap", 0)),
-                ns_extended=int(grp.attrs.get("ns_extended", ns_orig)),
-            )
+            c = LFPCompressed(**self._codec.chunk(ci))
             pieces.append(decompress(c, bin_channels=bin_channels))  # (nc[_binned], ns_chunk_i)
 
         full = np.concatenate(pieces, axis=1)  # (nc[_binned], total_samples)

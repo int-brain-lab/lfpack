@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- HDF5 format 2: the codec chunks of a scale are stored in a single flat `codec/` group
+  (`chunk_table`, `u_values`, `vh_deltas`, `vh_values`) instead of one group per 8 s chunk,
+  with delta-encoded uint16 Vh indices and without the coefficients that only reconstruct the
+  guard bands. Random access and the decoded samples are unchanged; files are ~30 % smaller
+  (28.8 → 20.6 MB on a 1.4 h NP1 recording). `compress_to_h5` writes format 2.
+
+### Added
+- `lfpack.upgrade_h5(src, dst)` repacks a format-1 archive into format 2 without
+  re-compressing. Format-1 files remain readable; that support is isolated in
+  `lfpack._legacy` for later removal.
+
 ### Fixed
 - `LFPackReader` accepts an already-open binary file-like object (e.g. an `s3fs`
   handle) as `h5_file`, not just a path — enables reading an archive directly off

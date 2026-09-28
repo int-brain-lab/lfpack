@@ -14,8 +14,10 @@ Two-stage lossy codec for local-field-potential (LFP) recordings:
     coefficients.  Larger singular values (stronger spatial modes) use a lower
     threshold, preserving more of their temporal detail.
 
-Recommended defaults (epsilon=150, alpha=28) give CR ≈ 600–1500 with
-median RMSE < 5 µV on Cadzow-denoised IBL NP1/NP2 recordings.
+The defaults (epsilon=100, alpha=7, shared spatial basis of 32 vectors) give files of
+~1.5 % of the 250 Hz float32 data at ~18.5 dB SNR on Cadzow-denoised IBL NP1 recordings.
+alpha is the parameter that moves behaviour decoding: 14 halves the file, 2.5 decodes within
+noise of the uncompressed data for twice the size.
 
 Typical usage
 -------------
@@ -111,8 +113,8 @@ def _count_wp_slots(ns: int) -> int:
 
 def compress(
     data: np.ndarray,
-    epsilon: float = 150.0,
-    alpha: float = 28.0,
+    epsilon: float = 100.0,
+    alpha: float = 7.0,
     floor_k: int = 64,
 ) -> LFPCompressed:
     """
@@ -124,10 +126,10 @@ def compress(
         LFP data matrix, float32 or float64.  Rows are channels, columns are time.
     epsilon : float
         SVD threshold multiplier.  rank = #{k : sv[k] > epsilon × sigma_noise}.
-        Default 150.
+        Default 100.
     alpha : float
         WP threshold multiplier per component: tau_k = alpha × sigma_noise / sv[k].
-        Set to 0 to skip wavelet-packet stage.  Default 28.
+        Set to 0 to skip wavelet-packet stage.  Default 7.
     floor_k : int
         Survival floor on the dominant mode: the top retained row (``k == 0``)
         keeps at least its ``floor_k`` largest-magnitude WP coefficients.  This
@@ -287,8 +289,8 @@ def decompress(compressed: LFPCompressed, bin_channels: int = 1) -> np.ndarray:
 def compress_pipeline(
     data: np.ndarray,
     h: dict | None = None,
-    epsilon: float = 150.0,
-    alpha: float = 28.0,
+    epsilon: float = 100.0,
+    alpha: float = 7.0,
     fs: float = 250.0,
     cadzow_rank: int = 5,
     cadzow_niter: int = 1,
@@ -306,9 +308,9 @@ def compress_pipeline(
         Defaults to the first *nc* channels of the NP1 (version 1) geometry.
         Pass `neuropixel.trace_header(version=2)` for NP2 probes.
     epsilon : float
-        SVD-adapt threshold multiplier.  Default 150.
+        SVD-adapt threshold multiplier.  Default 100.
     alpha : float
-        WP threshold multiplier.  Default 28.
+        WP threshold multiplier.  Default 7.
     fs : float
         LFP sampling rate [Hz].  Default 250.
     cadzow_rank : int
@@ -553,8 +555,8 @@ def compress_to_h5(
     h=None,
     chunk=_COMPRESS_CHUNK,
     overlap=_COMPRESS_OVERLAP,
-    epsilon=150.0,
-    alpha=28.0,
+    epsilon=100.0,
+    alpha=7.0,
     fs=250.0,
     t0_sync=None,
     fs_sync=None,
@@ -562,6 +564,7 @@ def compress_to_h5(
     n_jobs=4,
     saturation_intervals=None,
     saturation_attrs=None,
+    basis_size=_container.BASIS_SIZE,
 ):
     """
     Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
@@ -578,7 +581,8 @@ def compress_to_h5(
                                                 format_version, sglx_meta (JSON),
                                                 geometry_x, geometry_y
     /<recording>/<scale_str>/codec/      datasets: chunk_table, u_values, vh_deltas,
-                                                   vh_values (see ``lfpack._container``)
+                                                   vh_values, and basis + u_norms with a
+                                                   shared basis (see ``lfpack._container``)
 
     /<recording>/saturation              dataset (n_intervals, 2) int64 of
                                          [start_sample, stop_sample] at the raw LFP rate,
@@ -616,9 +620,9 @@ def compress_to_h5(
     overlap : int
         Guard-band samples each side.  Default 128.
     epsilon : float
-        SVD threshold multiplier.  Default 150.
+        SVD threshold multiplier.  Default 100.
     alpha : float
-        WP threshold multiplier.  Default 28.
+        WP threshold multiplier.  Default 7.
     fs : float
         Sampling rate [Hz] written into metadata.  Default 250.
     channels : dict or None
@@ -636,6 +640,9 @@ def compress_to_h5(
     saturation_attrs : dict or None
         Attributes attached to the saturation dataset (fs, ns_total, saturated_fraction,
         detection parameters, whether muting was applied).  Default None.
+    basis_size : int
+        Number of vectors of the shared spatial basis (one per recording and scale; each
+        chunk stores float16 coefficients in it).  Default 32.
     """
     import h5py
 
@@ -700,7 +707,7 @@ def compress_to_h5(
         results = Parallel(n_jobs=n_jobs, backend="loky")(
             delayed(_compress_chunk_worker)(job) for job in tqdm(jobs, desc="Compress", unit="chunk")
         )
-        _container.write_codec(f[root], results, _WP_WAVELET, _WP_MAXLEVEL)
+        _container.write_codec(f[root], results, _WP_WAVELET, _WP_MAXLEVEL, basis_size=basis_size)
         total_cr = sum(r["cr_total"] for r in results)
 
     print(f"Saved {out_h5}  mean CR={total_cr / n_chunks:.0f}")
@@ -868,8 +875,8 @@ def compress_bin_to_h5(
     cadzow_checkpoint_file=None,
     cadzow_kwargs=None,
     channel_labels=None,
-    epsilon=150.0,
-    alpha=28.0,
+    epsilon=100.0,
+    alpha=7.0,
     n_jobs=4,
     chunk=_COMPRESS_CHUNK,
     overlap=_COMPRESS_OVERLAP,
@@ -880,6 +887,7 @@ def compress_bin_to_h5(
     fs_sync=None,
     detect_saturation=True,
     saturation_kwargs=None,
+    basis_size=_container.BASIS_SIZE,
 ):
     """
     Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
@@ -924,9 +932,9 @@ def compress_bin_to_h5(
         ibldsp.voltage.detect_bad_channels_cbin.  Pass an array of zeros to skip
         detection explicitly.
     epsilon : float
-        SVD threshold multiplier.  Default 150.
+        SVD threshold multiplier.  Default 100.
     alpha : float
-        WP threshold multiplier.  Default 28.
+        WP threshold multiplier.  Default 7.
     n_jobs : int
         Parallel workers for the decimate+Cadzow stage.  Default 4.
     chunk : int
@@ -955,6 +963,8 @@ def compress_bin_to_h5(
         Forwarded to ``ibldsp.voltage.saturation_cbin`` (keys: ``max_voltage``,
         ``v_per_sec``, ``proportion``, ``mute_window_samples``).  Default None uses the
         ibldsp defaults with ``max_voltage`` taken from the SpikeGLX metadata.
+    basis_size : int
+        Shared spatial basis size, forwarded to ``compress_to_h5``.  Default 32.
 
     Returns
     -------
@@ -1098,6 +1108,7 @@ def compress_bin_to_h5(
         n_jobs=n_jobs,
         saturation_intervals=saturation_intervals,
         saturation_attrs=saturation_attrs,
+        basis_size=basis_size,
     )
 
     if delete_checkpoint:

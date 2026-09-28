@@ -5,19 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - Unreleased
 
 ### Changed
-- HDF5 format 2: the codec chunks of a scale are stored in a single flat `codec/` group
-  (`chunk_table`, `u_values`, `vh_deltas`, `vh_values`) instead of one group per 8 s chunk,
-  with delta-encoded uint16 Vh indices and without the coefficients that only reconstruct the
-  guard bands. Random access and the decoded samples are unchanged; files are ~30 % smaller
-  (28.8 → 20.6 MB on a 1.4 h NP1 recording). `compress_to_h5` writes format 2.
+- **HDF5 format 2** (breaking: lfpack only writes format 2). The codec chunks of a scale are
+  stored in one flat `codec/` group (`chunk_table`, `basis`, `u_values`, `u_norms`,
+  `vh_deltas`, `vh_values`) instead of one HDF5 group per 8 s chunk, with a **shared spatial
+  basis** per recording and scale: one (nc, 32) float32 basis plus float16 per-chunk
+  coefficients replace the float32 `U_scaled` of every chunk. Vh indices are delta-encoded
+  uint16 and the coefficients that only reconstruct the guard bands are dropped. Random
+  access is unchanged; on a 1.4 h NP1 recording at ε = 100, α = 14 the file goes from
+  38.7 MB (format 1) to 15.9 MB for < 0.01 dB of SNR.
+- Default codec parameters are now `epsilon=100`, `alpha=7` (were 150 and 28): at the same
+  file size as the former 0.4 "mild" tier, behaviour decoding moves closer to uncompressed.
+  `alpha` is the parameter that sets decoding quality; 14 and 2.5 bracket it.
 
 ### Added
-- `lfpack.upgrade_h5(src, dst)` repacks a format-1 archive into format 2 without
-  re-compressing. Format-1 files remain readable; that support is isolated in
-  `lfpack._legacy` for later removal.
+- `basis_size` parameter (default 32) on `compress_to_h5` and `compress_bin_to_h5`.
+- `lfpack.upgrade_h5(src, dst)` converts a format-1 archive to format 2 without
+  re-compressing.
+
+### Deprecated
+- Format 1 (`chunks/<i>/` groups) is read-only and will be removed in a future release;
+  its support is isolated in `lfpack._legacy`.
 
 ### Fixed
 - `LFPackReader` accepts an already-open binary file-like object (e.g. an `s3fs`

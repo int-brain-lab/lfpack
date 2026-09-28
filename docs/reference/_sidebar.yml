@@ -19,6 +19,11 @@ website:
     - contents:
       - reference/merge_h5.qmd
       - reference/subset_h5.qmd
+      - reference/upgrade_h5.qmd
       section: Multi-recording archives
+    - contents:
+      - reference/write_sync_attrs.qmd
+      - reference/clear_sync_attrs.qmd
+      section: Sync
     id: reference
   - id: dummy-sidebar

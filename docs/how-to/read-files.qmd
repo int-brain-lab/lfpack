@@ -1,0 +1,50 @@
+---
+title: "How to read lfpack files"
+---
+
+## Pick a recording and a scale
+
+A file can hold several recordings (e.g. every probe of a release) and several scales of each.
+
+```python
+from lfpack import LFPackReader
+
+LFPackReader.recordings("multi.lf.h5")            # ['probe00', 'probe01']
+LFPackReader.scales("multi.lf.h5", "probe00")     # [0]  (0 = full resolution)
+
+sr = LFPackReader("multi.lf.h5", recording="probe00", scale=0)
+```
+
+`recording` can be omitted when the file holds a single one.
+
+## Bin channels while reading
+
+Neighbouring channels are strongly correlated at LFP frequencies. `bin_channels` sums groups
+of adjacent channels during decoding, so a brain-wide sweep never materialises 384 channels:
+
+```python
+sr = LFPackReader("recording.lf.h5", bin_channels=4)
+traces = sr[0:1000]                     # (1000, nc // 4)
+sr.geometry["y"]                        # mean depth of each group
+sr.geometry_full["binned_channel_index"]  # raw channel → group
+
+sr.read_samples(0, 1000, bin_channels=8)  # per-call override
+```
+
+`bin_channels` must divide `nc`; `sr.channels` (brain locations) aggregates the same way.
+
+## Session-clock times
+
+Use `sr.times` rather than `np.arange(ns) / sr.fs` to align samples with trial events or
+spikes: it applies the sync stored in the file.
+
+## Format-1 files
+
+Files written by lfpack < 1.0 (format 1) are still read transparently. Format 1 is
+deprecated and will stop being readable in a future release; convert them with:
+
+```python
+import lfpack
+
+lfpack.upgrade_h5("old.lf.h5", "new.lf.h5")   # no re-compression; 2.4× smaller at ε = 100, α = 14
+```

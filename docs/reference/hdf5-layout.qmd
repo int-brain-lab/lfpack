@@ -1,134 +1,89 @@
 ---
-title: "HDF5 format specification"
+title: "HDF5 format"
 ---
 
-This page documents the on-disk layout of `.h5` files written by lfpack.
-
-## Layout (current — multi-recording, pyramidal)
+lfpack ≥ 1.0 writes **format 2** (`meta.attrs["format_version"] == 2`). Format 1 is read
+only; see [below](#format-1).
 
 ```
 <file>.h5
-└─ <recording>/           # one group per recording (e.g. "probe00")
-   └─ <scale_2digit>/     # zero-padded scale index (e.g. "00", "01")
-      ├─ meta             # scalar/array attributes (see below)
-      └─ chunks/
-         ├─ 0/            # first compressed chunk
-         │   ├─ U_scaled       float32  (nc, r)     shuffle+gzip
-         │   ├─ vh_indices     int32    (n_kept,)    gzip
-         │   └─ vh_values      float32  (n_kept,)    gzip
-         ├─ 1/
-         ...
+└─ <recording>/                 # e.g. a probe-insertion UUID
+   ├─ saturation                # (n_intervals, 2) int64 [start, stop], raw LFP samples
+   └─ <scale>/                  # "00" = full resolution
+      ├─ meta                   # attributes, plus optional sync_samples / sync_times
+      └─ codec/
+         ├─ chunk_table         # (n_chunks,) one row per 8 s chunk
+         ├─ basis               # (nc, m) float32, shared spatial basis
+         ├─ u_values            # (Σ m·rank_j,) float16, spatial coefficients C_j
+         ├─ u_norms             # (Σ rank_j,) float32, column norms of C_j
+         ├─ vh_deltas           # (Σ n_kept_j,) uint16 (uint32 if needed), index deltas
+         └─ vh_values           # (Σ n_kept_j,) float32, kept wavelet-packet coefficients
 ```
+
+The flat datasets are gzip + shuffle compressed in 16384-element storage chunks. Chunk `j`
+occupies the slice given by the cumulative sums of `m·rank`, `rank` and `n_kept` over the
+table rows before it, so one read touches one or two storage chunks per dataset.
+
+## Decoding chunk `j`
+
+```python
+U_scaled = basis @ C_j.reshape(m, rank_j) * u_norms_j   # (nc, rank_j)
+flat = np.cumsum(vh_deltas_j)                           # deltas restart at every chunk
+Vh_hat = np.zeros((rank_j, vh_cols_j)); Vh_hat.flat[flat] = vh_values_j
+X_j = U_scaled @ inverse_wavelet_packet(Vh_hat)         # db4, level 5, then trim guards
+```
+
+`LFPackReader` does this for you. The basis holds the top-m eigenvectors of
+$\sum_j U_j U_j^\top / \lVert U_j \rVert_F^2$ over the chunks' `U_scaled`, so every chunk
+weighs the same.
+
+## `chunk_table` fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rank` | uint16 | SVD rank of the chunk |
+| `n_kept` | uint32 | Stored wavelet-packet coefficients |
+| `vh_cols` | uint32 | Wavelet-packet slots per row |
+| `ns_original` | int32 | Written samples (2048 except the last chunk) |
+| `ns_extended` | int32 | Samples coded, guard bands included |
+| `left_overlap` | int32 | Left guard-band samples |
+| `cr_svd`, `cr_wp`, `cr_total`, `rmse` | float32 | Per-chunk diagnostics of the codec, before the basis projection |
 
 ## `meta` attributes
 
-| Attribute | Type | Description |
+| Attribute | Type | Meaning |
 |---|---|---|
-| `nc` | int | Number of channels |
-| `ns_total` | int | Total number of samples |
-| `fs` | float | Nominal sample rate (Hz) |
-| `fs_sync` | float | Sync-corrected sample rate (Hz); `NaN` when not available |
-| `t0_sync` | float | Session-clock time in seconds at sample 0; `NaN` when not available |
-| `epsilon` | float | SVD noise-floor threshold |
-| `alpha` | float | Wavelet-packet threshold multiplier |
-| `compress_chunk` | int | Samples per compressed chunk |
-| `geometry_x` | float32 array | Channel x positions (µm) |
-| `geometry_y` | float32 array | Channel y positions (µm) |
+| `format_version` | int | 2 |
+| `nc`, `ns_total` | int | Channels, samples |
+| `fs` | float | Nominal sampling rate (Hz) |
+| `fs_sync`, `t0_sync` | float | Sync-corrected rate and session time of sample 0; `NaN` if unknown |
+| `epsilon`, `alpha`, `basis_size` | float, float, int | Codec parameters |
+| `compress_chunk`, `compress_overlap` | int | 2048 and 128 samples |
+| `geometry_x`, `geometry_y` | float32 (nc,) | Channel positions (µm) |
+| `labels` | int8 (nc,) | Channel quality: 0 good, 1 dead, 2 noisy, 3 outside the brain |
+| `ml`, `ap`, `dv`, `atlas_id`, `acronym` | (nc,) | Optional brain locations |
 | `sglx_meta` | JSON string | Original SpikeGLX metadata |
 
-## `meta` child datasets
+`sync_samples` / `sync_times` (float64 child datasets of `meta`, optional) are piecewise sync
+knots in this scale's sample units. They are datasets rather than attributes because an
+exact fit can hold tens of thousands of knots, beyond HDF5's attribute size limit.
+`fs_sync` / `t0_sync` are always their least-squares affine, so code that reads only the
+attributes keeps working. Write both with `lfpack.write_sync_attrs`.
 
-| Dataset | Type | Description |
-|---|---|---|
-| `sync_samples` | float64 array, gzip+shuffle | Optional. Non-linear sync knots: sample index, this scale's native units |
-| `sync_times` | float64 array, gzip+shuffle | Optional. Non-linear sync knots: session-clock time (s), paired with `sync_samples` |
+## `saturation`
 
-Stored as child *datasets* of `meta`, not attrs, unlike everything else on this page: a
-`type='exact'` fit (see below) keeps every raw pulse verbatim, which can run to tens of
-thousands of knots for a single 3B session — an HDF5 attribute is backed by a fixed-size
-object header message and raises `OSError: object header message is too large` well before
-that (observed at ~300KB/column, i.e. ~38k knots). Datasets have no such ceiling, and
-gzip+shuffle typically halves the raw size on real (non-idealized) knot timing data.
+Written once per recording. Attributes: `fs`, `ns_total`, `n_saturated_samples`,
+`saturated_fraction`, the detection parameters and `muted` (whether the spans were zeroed).
 
-### Two sync styles: linear affine vs. piecewise knots
+## HDF5 version
 
-`fs_sync`/`t0_sync` are **always** plain scalar attrs — every consumer that reads
-`meta.attrs` directly (e.g. `qc_report.py`) and `LFPackReader.t0`/`.fs` can rely on that
-regardless of which style below produced them.
+Files are written with `libver=("earliest", "v110")`, readable by any HDF5 ≥ 1.10
+(h5py ≥ 3.0). Do not switch to `libver="latest"`: it follows whatever library wrote the
+file and produces files that older installs fail to read with unhelpful errors.
 
-- **Linear (affine)** — pass scalar `t0_sync`/`fs_sync` to `compress_to_h5`/`compress_bin_to_h5`,
-  or write them directly as `meta` attrs. A single straight line maps sample index to session
-  time. Correct whenever the underlying clock relationship really is linear (ordinary
-  crystal-oscillator drift, ppm-level mismatch) — the common case.
-- **Piecewise (knots)** — write the raw sample↔time knot pairs verbatim via
-  `lfpack.write_sync_attrs(meta_group, sample_knots, time_knots)`, which writes them as the
-  two datasets above and derives/writes `t0_sync`/`fs_sync` as a least-squares affine
-  *summary* of the knots at the same time. Use this whenever the true mapping has real
-  non-linear structure a single affine would misrepresent — a step, a truncated/re-based
-  recording, per-probe drift — such as the knot arrays IBL's `sync_probe_front_times()`
-  already fits from raw sync pulses. Clear all four entries together with
-  `lfpack.clear_sync_attrs(meta_group)` (e.g. before re-writing on a re-run, so a failed
-  attempt can never leave a previous run's entries in place).
+## Format 1 {#format-1}
 
-`LFPackReader` picks the right tier automatically, in `_sample_to_time`: when `sync_samples`/
-`sync_times` are present it interpolates through them (`scipy.interpolate.interp1d`,
-`bounds_error=False`), falling back to the derived affine (`t0_sync + n/fs_sync`) for any
-sample outside the knot range (e.g. before the first knot, or after the last); when they're
-absent it just uses the affine directly, or the nominal `fs` when no sync was ever attached.
-Both `.times` and `saturation_times()` go through this same method, so they can never
-diverge from each other. See [how to write your own lfpack file](../how-to/write-your-own-file.qmd#sync)
-for a worked example.
-
-## Chunk datasets
-
-Each chunk group (`chunks/<i>/`) stores three datasets.
-
-### `U_scaled`
-
-Shape `(nc, r)`, dtype `float32`.
-Stores `U[:, :r] * sv[:r]` — the left singular vectors scaled by their singular values.
-Written with the HDF5 `shuffle` filter followed by `gzip` (level 4).
-The shuffle filter reorders bytes by significance (all MSBs first, then the next byte, …), improving gzip compression on dense float32 data by ~10–20%.
-
-### `vh_indices` and `vh_values`
-
-Shape `(n_kept,)`, dtype `int32` and `float32` respectively.
-Store the sparse non-zero wavelet-packet coefficients of the right singular vectors.
-The dense array can be reconstructed as:
-
-```python
-Vh_hat = np.zeros(vh_shape, dtype=np.float32)
-Vh_hat.flat[vh_indices] = vh_values
-```
-
-`vh_shape` is stored as an attribute on the chunk group.
-Storing indices + values rather than a dense zeroed array and relying on gzip to compress zero runs gives a smaller file and faster reads.
-
-## Chunk group attributes
-
-| Attribute | Type | Description |
-|---|---|---|
-| `r` | int | SVD rank for this chunk |
-| `ns` | int | Number of samples in this chunk |
-| `ns_extended` | int | Samples including guard bands |
-| `vh_shape` | 2-tuple | Shape of the dense Vh_hat array |
-
-## HDF5 version compatibility
-
-All files are written with `libver=('earliest', 'v110')`, which pins the format to
-HDF5 1.10 features (released 2017).  Any HDF5 ≥ 1.10 — and therefore any h5py ≥ 3.0 —
-can read lfpack files.
-
-::: {.callout-warning}
-Do not change this to `libver='latest'`.  That setting resolves to whatever the
-installed library considers current at write time, so files written on different
-machines end up in different formats.  Reading them elsewhere then fails with
-cryptic low-level errors (`bad version number for layout message`) with no
-indication that a version mismatch is the cause.
-:::
-
-## Legacy flat layout
-
-Files written by lfpack ≤ 0.0.x use a flat layout with `meta` and `chunks/` at the root (no recording/scale hierarchy).
-`LFPackReader` detects this automatically (by checking for a `meta` key at root level) and remains fully readable.
-Writing this format is no longer supported.
+Written by lfpack < 1.0: one group per chunk, `<scale>/chunks/<i>/` with `U_scaled` (nc, r)
+float32, `vh_indices` int32 and `vh_values` float32, and the chunk metadata as attributes.
+The older flat layout (`meta` and `chunks` at the file root) is format 1 as well. Both are
+read transparently, are deprecated, and convert with `lfpack.upgrade_h5`.

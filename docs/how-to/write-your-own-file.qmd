@@ -2,107 +2,53 @@
 title: "How to write your own lfpack file"
 ---
 
-The [tutorial](../tutorials/first-compression.qmd) covers `compress_bin_to_h5`, which runs the
-full pipeline starting from a raw SpikeGLX `.cbin`/`.bin`. This guide covers the lower-level
-`compress_to_h5`, for when your LFP data doesn't come from that pipeline at all — a different
-acquisition system, synthetic data, or anything else already sitting in memory as a plain array.
-
-## Write a single-recording file
-
-`compress_to_h5` takes a *path* to an `(ns, nc)` float32 `.npy` file (time-first), not an
-in-memory array — save your data first:
+`compress_bin_to_h5` starts from a SpikeGLX binary. For anything else (another acquisition
+system, simulated data, an array already in memory) use `compress_to_h5`, which runs only the
+codec on a time-first `(ns, nc)` float32 `.npy`:
 
 ```python
 import numpy as np
 from lfpack import compress_to_h5
 
-data = np.load("my_lfp.npy")   # your own (ns, nc) float32 array, already at the rate you want stored
-np.save("my_lfp_checkpoint.npy", data)
-
-compress_to_h5(
-    "my_lfp_checkpoint.npy",
-    "my_recording.lf.h5",
-    recording="my-session-probe00",
-    fs=250.0,
-)
+np.save("probe00.npy", data)   # (ns, nc) float32, already at the rate to store
+compress_to_h5("probe00.npy", "session.lf.h5", recording="probe00", fs=250.0, alpha=7.0)
 ```
 
-Read it back exactly like any other lfpack file:
+`recording` is any unique key (IBL uses the probe-insertion UUID); it becomes the top-level
+HDF5 group and is what `LFPackReader(..., recording=)` selects. Pass `h=` for the probe
+geometry and `channels=` for brain locations; see
+[`compress_to_h5`](../reference/compress_to_h5.qmd) for every parameter.
+
+## Several recordings in one file
+
+Write one file per recording, then merge them without re-compressing:
 
 ```python
-from lfpack import LFPackReader
+from lfpack import merge_h5, subset_h5
 
-sr = LFPackReader("my_recording.lf.h5")
-traces = sr[0:1000]
+merge_h5(["probe00.lf.h5", "probe01.lf.h5"], "session.lf.h5")
+subset_h5("session.lf.h5", "probe01_only.lf.h5", recordings=["probe01"])
 ```
-
-The name passed as `recording` is an arbitrary unique key (e.g. a probe-insertion UUID) — it
-becomes the top-level HDF5 group name, and is what `recording=` on `LFPackReader` selects.
-
-## Write a multi-recording file
-
-A single HDF5 file can hold several recordings (e.g. both probes from one session). Call
-`compress_to_h5` once per recording, passing the same `out_h5` path each time — later calls
-append rather than overwrite:
-
-```python
-from lfpack import compress_to_h5
-
-compress_to_h5("probe00_checkpoint.npy", "session.lf.h5", recording="probe00", fs=250.0)
-compress_to_h5("probe01_checkpoint.npy", "session.lf.h5", recording="probe01", fs=250.0)
-```
-
-See [how to work with multi-recording files](multi-recording.qmd) for listing, selecting, and
-reading them back, and [`compress_to_h5`](../reference/compress_to_h5.qmd) for the full parameter
-list (geometry, channel annotations, saturation intervals, sync — below).
 
 ## Attach sync {#sync}
 
-lfpack supports two sync styles — both end up as plain scalar `t0_sync`/`fs_sync` attrs, so
-every reader/consumer works the same regardless of which one you used. See
-[the HDF5 format reference](../reference/hdf5-layout.qmd#two-sync-styles-linear-affine-vs.-piecewise-knots)
-for the full detail; the short version:
-
-**Linear (affine)** — one straight line, sample index to session time. Pass it straight to
-`compress_to_h5`:
+**Affine**: a sync-corrected rate and start time, enough for ordinary clock drift:
 
 ```python
-compress_to_h5(
-    "my_lfp_checkpoint.npy", "my_recording.lf.h5", recording="probe00", fs=250.0,
-    t0_sync=12.345,      # session-clock time (s) at sample 0
-    fs_sync=249.998,     # actual (sync-corrected) sample rate (Hz)
-)
+compress_to_h5("probe00.npy", "probe00.lf.h5", recording="probe00", fs=250.0,
+               t0_sync=12.345, fs_sync=249.998)
 ```
 
-Right for ordinary crystal-oscillator drift — the common case, and all `compress_bin_to_h5`
-callers typically need.
-
-**Piecewise (knots)** — a set of sample↔time anchor points, for sessions where the true
-mapping has real non-linear structure (a step, a truncated recording, per-probe drift) that
-a single affine would misrepresent. Write these directly onto the `meta` group after
-`compress_to_h5`, via `lfpack.write_sync_attrs` (which also derives and writes the
-`t0_sync`/`fs_sync` scalar summary for you):
+**Piecewise**: when the sample-to-time mapping is not a straight line (a step, a truncated
+recording), write the knots after compression. `write_sync_attrs` also stores their
+least-squares affine as `t0_sync`/`fs_sync`, and the reader interpolates through the knots:
 
 ```python
 import h5py
 import lfpack
 
-sample_knots = ...  # float64 array, this scale's native sample-index units, strictly increasing
-time_knots = ...    # float64 array, session-clock seconds, strictly increasing, same length
-
-with h5py.File("my_recording.lf.h5", "a") as f:
+with h5py.File("probe00.lf.h5", "a") as f:
     meta = f["probe00/00/meta"]
-    lfpack.write_sync_attrs(meta, sample_knots, time_knots)
+    lfpack.clear_sync_attrs(meta)                           # drop a previous attempt
+    lfpack.write_sync_attrs(meta, sample_knots, time_knots)  # float64, increasing
 ```
-
-`LFPackReader` then interpolates through the knots for `.times`/`saturation_times()`, falling
-back to the derived affine outside their range. Re-running a fit and want to discard a
-previous attempt first? `lfpack.clear_sync_attrs(meta)` removes all four sync attrs in one
-call — always clear before re-writing on a re-run, so a failed attempt can never leave stale
-attrs from an earlier success in place.
-
-## What's next?
-
-- [How to work with multi-recording HDF5 files](multi-recording.qmd)
-- [HDF5 format reference](../reference/hdf5-layout.qmd) — the full on-disk layout
-- [`compress_to_h5` reference](../reference/compress_to_h5.qmd) — full parameter list

@@ -46,10 +46,13 @@ Steps 6–7 are checkpointed to a `.npy` file so the expensive decimation can be
 
 ### Codec (`compress` / `decompress`)
 
-`compress(data, epsilon=150, alpha=28)` → `LFPCompressed` dataclass:
+`compress(data, epsilon=100, alpha=7)` → `LFPCompressed` dataclass:
 - **SVD rank selection**: keep singular values > `epsilon × sigma_noise`
 - **Wavelet-packet thresholding**: db4, level 5; per-component threshold `alpha × sigma_noise / sv[k]`
-- Sparse Vh stored as `(vh_indices, vh_values)` in HDF5; `U_scaled` with shuffle+gzip
+- On write, `U_scaled` of every chunk is projected on one shared spatial basis per scale
+  (`basis_size=32`, `_container.shared_basis` / `project_on_basis`); Vh is unchanged.
+- alpha is the only parameter that moves behaviour decoding (benchmark in the oliche-quarto
+  `2026-06-lfp-compression-svd` analysis): v1.0 tiers are α = 14 / 7 / 2.5 at ε = 100.
 
 Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge transients.
 
@@ -65,14 +68,15 @@ Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge t
       ├─ meta         # attrs: nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
       │               # optional child datasets: sync_samples, sync_times (gzip+shuffle)
       └─ codec/       # format 2 (meta.attrs["format_version"] == 2), see _container.py:
-                      # chunk_table (per-chunk rank, n_kept, ...), u_values, vh_deltas, vh_values
+                      # chunk_table (per-chunk rank, n_kept, ...), basis (nc, m) float32,
+                      # u_values float16 (m, rank) per chunk, u_norms, vh_deltas, vh_values
 ```
 
-Format 2 concatenates all 8 s codec chunks into flat datasets (offsets = cumsum of `nc·rank` and
-`n_kept`), so random access is kept while the per-chunk HDF5 overhead of format 1 disappears; it
-also drops Vh coefficients that only reconstruct the guard bands (decoded output unchanged).
-Format 1 (`chunks/<i>/` groups with `U_scaled`, `vh_indices`, `vh_values`) is still read; all of its
-code lives in `_legacy.py` (reader, v1 writer for tests, `upgrade_h5`) so it can be deleted in one go.
+lfpack >= 1.0 only writes format 2: flat datasets (offsets = cumsum of `m·rank`, `rank` and
+`n_kept`, so random access is kept without format 1's per-chunk HDF5 overhead), a shared spatial
+basis, and no Vh coefficients that only reconstruct the guard bands. Format 1 (`chunks/<i>/` groups
+with `U_scaled`, `vh_indices`, `vh_values`) is read-only and deprecated; its reader and `upgrade_h5`
+live in `_legacy.py` so it can be deleted in one go (the v1 writer used by tests is in the test file).
 
 The `saturation` node sits at recording level (not under a scale) because it describes the raw recording, not a codec pyramid level; `merge_h5` copies it automatically. Legacy flat layout (meta at root) is still readable for backwards compatibility.
 

@@ -1,0 +1,9 @@
+# clear_sync_attrs { #lfpack.clear_sync_attrs }
+
+```python
+clear_sync_attrs(meta_group)
+```
+
+Delete all four sync entries (`SYNC_ATTRS`) from a ``meta`` HDF5 group.
+
+No-op for entries that are already absent.

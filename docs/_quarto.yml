@@ -8,32 +8,24 @@ website:
   repo-url: https://github.com/int-brain-lab/lfpack
   navbar:
     left:
-      - text: "Datasets"
-        menu:
-          - text: "BWM LFP dataset"
-            file: how-to/bwm-dataset.qmd
       - text: "Tutorial"
         file: tutorials/first-compression.qmd
       - text: "How-To"
         menu:
+          - text: "BWM LFP dataset"
+            file: how-to/bwm-dataset.qmd
+          - text: "Read lfpack files"
+            file: how-to/read-files.qmd
           - text: "Write your own file"
             file: how-to/write-your-own-file.qmd
-          - text: "Binned-channel reads"
-            file: how-to/binned-reads.qmd
-          - text: "Multi-recording files"
-            file: how-to/multi-recording.qmd
+      - text: "Pipeline and codec"
+        file: explanation/pipeline.qmd
       - text: "Reference"
         menu:
           - text: "API"
             file: reference/index.qmd
           - text: "HDF5 format"
             file: reference/hdf5-layout.qmd
-      - text: "Explanation"
-        menu:
-          - text: "Compression pipeline"
-            file: explanation/pipeline.qmd
-          - text: "Benchmark gallery"
-            file: explanation/gallery.qmd
     right:
       - text: "Help"
         icon: question-circle
@@ -72,7 +64,13 @@ quartodoc:
       contents:
         - LFPackReader
     - title: "Multi-recording archives"
-      desc: "Combine or subset recordings across HDF5 files without re-compression."
+      desc: "Combine, subset or upgrade archives without re-compressing."
       contents:
         - merge_h5
         - subset_h5
+        - upgrade_h5
+    - title: "Sync"
+      desc: "Piecewise sample-to-time knots on a scale's meta group."
+      contents:
+        - write_sync_attrs
+        - clear_sync_attrs

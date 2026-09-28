@@ -31,9 +31,19 @@ Random-access decompression.
 
 ## Multi-recording archives
 
-Combine or subset recordings across HDF5 files without re-compression.
+Combine, subset or upgrade archives without re-compressing.
 
 | | |
 | --- | --- |
 | [merge_h5](merge_h5.qmd#lfpack.merge_h5) | Merge multiple per-recording HDF5 files into one multi-recording archive. |
 | [subset_h5](subset_h5.qmd#lfpack.subset_h5) | Copy a subset of recordings out of a multi-recording HDF5 archive. |
+| [upgrade_h5](upgrade_h5.qmd#lfpack.upgrade_h5) | Rewrite a format-1 archive in format 2, without re-compressing. |
+
+## Sync
+
+Piecewise sample-to-time knots on a scale's meta group.
+
+| | |
+| --- | --- |
+| [write_sync_attrs](write_sync_attrs.qmd#lfpack.write_sync_attrs) | Write ALF sync knots plus a derived affine summary to a ``meta`` HDF5 group. |
+| [clear_sync_attrs](clear_sync_attrs.qmd#lfpack.clear_sync_attrs) | Delete all four sync entries (`SYNC_ATTRS`) from a ``meta`` HDF5 group. |

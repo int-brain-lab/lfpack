@@ -1,0 +1,26 @@
+# upgrade_h5 { #lfpack.upgrade_h5 }
+
+```python
+upgrade_h5(src_h5, dst_h5, basis_size=_container.BASIS_SIZE)
+```
+
+Rewrite a format-1 archive in format 2, without re-compressing.
+
+Every format-1 scale is repacked into the flat ``codec`` group with a shared spatial
+basis; the temporal coefficients are kept as they are (minus those that only reconstruct
+the guard bands), so the only loss is the basis projection (< 0.01 dB SNR at m = 32).
+Everything else (meta, sync datasets, saturation tables, format-2 scales) is copied as is.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name       | Type        | Description                                                           | Default                 |
+|------------|-------------|-----------------------------------------------------------------------|-------------------------|
+| src_h5     | path - like | Source multi-recording archive (``/<recording>/<scale>/...`` layout). | _required_              |
+| dst_h5     | path - like | Output archive (always created fresh).                                | _required_              |
+| basis_size | int         | Number of shared spatial basis vectors.  Default 32.                  | `_container.BASIS_SIZE` |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type   | Description                |
+|--------|--------|----------------------------|
+|        | Path   | Resolved path to *dst_h5*. |

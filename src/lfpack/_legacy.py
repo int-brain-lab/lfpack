@@ -1,8 +1,9 @@
 """
-Format-1 (one HDF5 group per codec chunk) support, kept while released archives are upgraded.
+Format-1 (one HDF5 group per codec chunk) read support, deprecated.
 
-Everything specific to format 1 lives in this module so that dropping it is a matter
-of deleting the file and the ``format_version == 1`` branch of ``LFPackReader``.
+lfpack >= 1.0 only writes format 2.  Format-1 archives stay readable and ``upgrade_h5``
+converts them; everything specific to format 1 lives in this module so that dropping it
+is a matter of deleting the file and the ``format_version == 1`` branch of ``LFPackReader``.
 
 Format-1 layout::
 
@@ -27,27 +28,6 @@ from lfpack import _container
 from lfpack._core import _H5_LIBVER, _WP_MAXLEVEL, _WP_WAVELET, _transcopy_group
 
 _ATTRS = ("ns_original", "ns_extended", "left_overlap", "epsilon", "alpha", "cr_svd", "cr_wp", "cr_total", "rmse")
-
-
-def write_chunks_v1(scale_group, results):
-    """
-    Write compressed chunks as format-1 per-chunk groups under ``<scale_group>/chunks``.
-
-    Parameters
-    ----------
-    scale_group : h5py.Group
-        The ``/<recording>/<scale>`` group.
-    results : sequence of dict
-        Same per-chunk dicts as ``lfpack._container.write_codec``.
-    """
-    cg = scale_group.create_group("chunks")
-    for ci, res in enumerate(results):
-        grp = cg.create_group(str(ci))
-        for name in ("U_scaled", "vh_indices", "vh_values"):
-            grp.create_dataset(name, data=res[name], compression="gzip", shuffle=True)
-        grp.attrs["vh_shape"] = res["vh_shape"]
-        for name in _ATTRS:
-            grp.attrs[name] = res[name]
 
 
 class ChunkGroupReader:
@@ -105,13 +85,14 @@ class ChunkGroupReader:
         )
 
 
-def upgrade_h5(src_h5, dst_h5):
+def upgrade_h5(src_h5, dst_h5, basis_size=_container.BASIS_SIZE):
     """
     Rewrite a format-1 archive in format 2, without re-compressing.
 
-    Every format-1 scale is repacked into the flat ``codec`` group (the guard-band-only
-    coefficients are dropped, which leaves the decoded output unchanged); everything
-    else (meta, sync datasets, saturation tables, format-2 scales) is copied as is.
+    Every format-1 scale is repacked into the flat ``codec`` group with a shared spatial
+    basis; the temporal coefficients are kept as they are (minus those that only reconstruct
+    the guard bands), so the only loss is the basis projection (< 0.01 dB SNR at m = 32).
+    Everything else (meta, sync datasets, saturation tables, format-2 scales) is copied as is.
 
     Parameters
     ----------
@@ -119,6 +100,8 @@ def upgrade_h5(src_h5, dst_h5):
         Source multi-recording archive (``/<recording>/<scale>/...`` layout).
     dst_h5 : path-like
         Output archive (always created fresh).
+    basis_size : int
+        Number of shared spatial basis vectors.  Default 32.
 
     Returns
     -------
@@ -143,7 +126,7 @@ def upgrade_h5(src_h5, dst_h5):
                 _transcopy_group(item["meta"], scale.require_group("meta"))
                 reader = ChunkGroupReader(item["chunks"])
                 results = [reader.results(ci) for ci in range(len(reader))]
-                _container.write_codec(scale, results, _WP_WAVELET, _WP_MAXLEVEL)
+                _container.write_codec(scale, results, _WP_WAVELET, _WP_MAXLEVEL, basis_size=basis_size)
     return dst_h5.resolve()
 
 

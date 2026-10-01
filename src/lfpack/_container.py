@@ -1,24 +1,28 @@
 """
 Flat, random-access HDF5 container for lfpack codec chunks (format version 2).
 
-Format 1 stored every 8 s codec chunk as its own HDF5 group holding three small
-gzip datasets and a dozen attributes, which costs ~9.5 kB of HDF5 object overhead
-per chunk (~20 % of a typical file).  Format 2 concatenates the chunks into a few
-flat datasets plus a per-chunk table, so the overhead is paid once per scale:
+Format 1 stored every 8 s codec chunk as its own HDF5 group, with a float32 U_scaled
+per chunk and ~9.5 kB of HDF5 object overhead.  Format 2 concatenates the chunks into
+flat datasets plus a per-chunk table, and stores the spatial factors in one shared
+basis per scale, since the spatial subspace of a recording barely moves over a session:
 
     /<recording>/<scale>/codec/
         chunk_table   (n_chunks,) compound: rank, n_kept, vh_cols, ns_original,
                       ns_extended, left_overlap, cr_svd, cr_wp, cr_total, rmse
-        u_values      (sum nc * rank,) float32   U_scaled of each chunk, C-order (nc, rank)
+        basis         (nc, m) float32   top-m eigenvectors of sum_j U_j U_jᵀ / ‖U_j‖²_F
+                      over the chunks' U_scaled (every chunk weighs the same)
+        u_values      (sum m * rank,) float16   C_j = Bᵀ U_scaled_j, unit-norm columns,
+                      C-order (m, rank)
+        u_norms       (sum rank,) float32   column norms of Bᵀ U_scaled_j
         vh_deltas     (sum n_kept,) uint16|uint32  first differences of the flat
                       Vh_hat indices, restarted at every chunk (so the first value of
                       a chunk is its absolute first index)
         vh_values     (sum n_kept,) float32
 
-Offsets are the cumulative sums of ``nc * rank`` and ``n_kept``, so reading one codec
-chunk touches a single HDF5 storage chunk or two per dataset: random access is kept.
-The indices shrink because deltas are small (uint16 when they fit) and compress well
-after shuffle + gzip.
+The decoder uses U_scaled_j ≈ basis @ C_j * u_norms_j.  Offsets are the cumulative sums
+of ``m * rank``, ``rank`` and ``n_kept``, so reading one codec chunk touches one or two
+HDF5 storage chunks per dataset: random access is kept.  The basis only needs the
+U_scaled of every chunk before writing, not a second pass over the data.
 
 At write time, Vh_hat coefficients whose synthesis function is zero over the central
 (written) samples are dropped: they only reconstruct guard-band samples that the
@@ -33,6 +37,8 @@ import numpy as np
 import pywt
 
 FORMAT_VERSION = 2
+# Shared spatial basis size: m = 24-48 decode alike on the IBL benchmark, m = 16 loses SNR.
+BASIS_SIZE = 32
 # Elements per HDF5 storage chunk of the flat datasets (64 kB of float32), about one
 # codec chunk's worth of coefficients: a random read decompresses at most a few of them.
 _STORAGE_CHUNK = 16384
@@ -101,7 +107,59 @@ def central_slot_mask(ns_extended, left_overlap, ns_original, wavelet, maxlevel,
     return mask
 
 
-def write_codec(scale_group, results, wavelet, maxlevel):
+def shared_basis(u_scaled, basis_size):
+    """
+    Per-recording spatial basis from the chunks' U_scaled.
+
+    Parameters
+    ----------
+    u_scaled : sequence of ndarray (nc, rank_j)
+        U_scaled (U · s) of every codec chunk.
+    basis_size : int
+        Number of basis vectors m (clipped to nc).
+
+    Returns
+    -------
+    ndarray (nc, m), float32
+        Orthonormal columns: the top-m eigenvectors of sum_j U_j U_jᵀ / ‖U_j‖²_F, so every
+        chunk weighs the same whatever its amplitude.  All-zero (muted) chunks are skipped.
+    """
+    nc = np.asarray(u_scaled[0]).shape[0]
+    gram = np.zeros((nc, nc))
+    for u in u_scaled:
+        u = np.asarray(u, dtype=np.float64)
+        energy = np.sum(u**2)
+        if energy > 0:
+            gram += u @ u.T / energy
+    w, v = np.linalg.eigh(gram)
+    return np.ascontiguousarray(v[:, np.argsort(w)[::-1][: min(basis_size, nc)]], dtype=np.float32)
+
+
+def project_on_basis(u_scaled, basis):
+    """
+    Spatial coefficients of one chunk in the shared basis.
+
+    Parameters
+    ----------
+    u_scaled : ndarray (nc, rank)
+        U_scaled of the chunk.
+    basis : ndarray (nc, m), float32
+        Shared basis from ``shared_basis``.
+
+    Returns
+    -------
+    c : ndarray (m, rank), float16
+        Unit-norm columns of Bᵀ U_scaled (zero columns stay zero).
+    norms : ndarray (rank,), float32
+        Column norms of Bᵀ U_scaled; the decoder uses ``basis @ c * norms``.
+    """
+    c = basis.astype(np.float64).T @ np.asarray(u_scaled, dtype=np.float64)
+    norms = np.linalg.norm(c, axis=0)
+    c = np.divide(c, norms, out=np.zeros_like(c), where=norms > 0)
+    return c.astype(np.float16), norms.astype(np.float32)
+
+
+def write_codec(scale_group, results, wavelet, maxlevel, basis_size=BASIS_SIZE):
     """
     Write compressed chunks to ``<scale_group>/codec`` in format 2.
 
@@ -118,9 +176,13 @@ def write_codec(scale_group, results, wavelet, maxlevel):
         Wavelet-packet family used by the codec.
     maxlevel : int
         Wavelet-packet decomposition level used by the codec.
+    basis_size : int
+        Number of shared spatial basis vectors m (clipped to nc).  The chunk-table ``rmse``
+        and ``cr_*`` fields are those of the per-chunk codec, before the projection.
     """
+    basis = shared_basis([res["U_scaled"] for res in results], basis_size)
     table = np.zeros(len(results), dtype=_CHUNK_TABLE_DTYPE)
-    u_parts, delta_parts, value_parts = [], [], []
+    u_parts, norm_parts, delta_parts, value_parts = [], [], [], []
     for ci, res in enumerate(results):
         rank, vh_cols = (int(x) for x in res["vh_shape"])
         mask = central_slot_mask(
@@ -136,7 +198,9 @@ def write_codec(scale_group, results, wavelet, maxlevel):
         idx, values = idx[order], np.asarray(res["vh_values"], dtype=np.float32)[order]
         keep = mask[idx % vh_cols]
         idx, values = idx[keep], values[keep]
-        u_parts.append(np.asarray(res["U_scaled"], dtype=np.float32).ravel())
+        c, norms = project_on_basis(res["U_scaled"], basis)
+        u_parts.append(c.ravel())
+        norm_parts.append(norms)
         delta_parts.append(np.diff(idx, prepend=0))
         value_parts.append(values)
         table[ci] = (
@@ -156,8 +220,10 @@ def write_codec(scale_group, results, wavelet, maxlevel):
     delta_dtype = np.uint16 if deltas.size == 0 or deltas.max() <= np.iinfo(np.uint16).max else np.uint32
     cg = scale_group.create_group("codec")
     cg.create_dataset("chunk_table", data=table)
+    cg.create_dataset("basis", data=basis)
     for name, parts, dtype in (
-        ("u_values", u_parts, np.float32),
+        ("u_values", u_parts, np.float16),
+        ("u_norms", norm_parts, np.float32),
         ("vh_deltas", [deltas], delta_dtype),
         ("vh_values", value_parts, np.float32),
     ):
@@ -165,6 +231,7 @@ def write_codec(scale_group, results, wavelet, maxlevel):
         kw = dict(chunks=(min(_STORAGE_CHUNK, data.size),), compression="gzip", shuffle=True) if data.size else {}
         cg.create_dataset(name, data=data, **kw)
     scale_group["meta"].attrs["format_version"] = FORMAT_VERSION
+    scale_group["meta"].attrs["basis_size"] = basis.shape[1]
 
 
 class CodecReader:
@@ -181,9 +248,11 @@ class CodecReader:
         self._cg = scale_group["codec"]
         self._alpha = float(scale_group["meta"].attrs["alpha"])
         self._epsilon = float(scale_group["meta"].attrs["epsilon"])
-        self._nc = int(scale_group["meta"].attrs["nc"])
         self.table = self._cg["chunk_table"][()]
-        self._u_offsets = np.concatenate([[0], np.cumsum(self.table["rank"].astype(np.int64) * self._nc)])
+        rank = self.table["rank"].astype(np.int64)
+        self._basis = self._cg["basis"][()]
+        self._u_offsets = np.concatenate([[0], np.cumsum(rank * self._basis.shape[1])])
+        self._norm_offsets = np.concatenate([[0], np.cumsum(rank)])
         self._vh_offsets = np.concatenate([[0], np.cumsum(self.table["n_kept"].astype(np.int64))])
 
     def __len__(self):
@@ -205,13 +274,15 @@ class CodecReader:
         """
         row = self.table[ci]
         rank = int(row["rank"])
-        u = self._cg["u_values"][self._u_offsets[ci] : self._u_offsets[ci + 1]]
+        c = self._cg["u_values"][self._u_offsets[ci] : self._u_offsets[ci + 1]].reshape(-1, rank)
+        norms = self._cg["u_norms"][self._norm_offsets[ci] : self._norm_offsets[ci + 1]]
+        u_scaled = (self._basis @ c.astype(np.float32)) * norms
         v0, v1 = self._vh_offsets[ci], self._vh_offsets[ci + 1]
         flat = np.cumsum(self._cg["vh_deltas"][v0:v1], dtype=np.int64)
         Vh_hat = np.zeros((rank, int(row["vh_cols"])), dtype=np.float32)
         Vh_hat.ravel()[flat] = self._cg["vh_values"][v0:v1]
         return dict(
-            U_scaled=u.reshape(self._nc, rank),
+            U_scaled=u_scaled,
             Vh_hat=Vh_hat,
             ns_original=int(row["ns_original"]),
             epsilon=self._epsilon,

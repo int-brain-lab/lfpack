@@ -4,8 +4,8 @@
 compress_pipeline(
     data,
     h=None,
-    epsilon=150.0,
-    alpha=28.0,
+    epsilon=100.0,
+    alpha=7.0,
     fs=250.0,
     cadzow_rank=5,
     cadzow_niter=1,
@@ -21,8 +21,8 @@ Full LFP compression pipeline: Cadzow denoise → SVD-adapt → WP threshold.
 |--------------|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
 | data         | ndarray of shape (nc, ns), float32 | Raw LFP data at *fs* Hz.  Rows are channels, columns are time samples.                                                                                                                             | _required_ |
 | h            | dict or None                       | Neuropixel probe header containing 'x' and 'y' channel coordinates. Defaults to the first *nc* channels of the NP1 (version 1) geometry. Pass `neuropixel.trace_header(version=2)` for NP2 probes. | `None`     |
-| epsilon      | float                              | SVD-adapt threshold multiplier.  Default 150.                                                                                                                                                      | `150.0`    |
-| alpha        | float                              | WP threshold multiplier.  Default 28.                                                                                                                                                              | `28.0`     |
+| epsilon      | float                              | SVD-adapt threshold multiplier.  Default 100.                                                                                                                                                      | `100.0`    |
+| alpha        | float                              | WP threshold multiplier.  Default 7.                                                                                                                                                               | `7.0`      |
 | fs           | float                              | LFP sampling rate [Hz].  Default 250.                                                                                                                                                              | `250.0`    |
 | cadzow_rank  | int                                | Spatial de-rank applied by the Cadzow denoiser.  Default 5.                                                                                                                                        | `5`        |
 | cadzow_niter | int                                | Number of Cadzow iterations.  Default 1.                                                                                                                                                           | `1`        |

@@ -1,151 +1,62 @@
 ---
-title: "Compression pipeline"
+title: "Pipeline and codec"
 bibliography: ../references.bib
 ---
 
-lfpack applies eight sequential stages to raw Neuropixels LFP data before encoding.
-This page explains what each stage does and why it is included.
+`compress_bin_to_h5` turns a raw 2500 Hz SpikeGLX LFP binary into an lfpack file in two
+stages: preprocessing to a denoised 250 Hz float32 array (checkpointed as `.npy`), then the
+codec. `compress_to_h5` runs the codec alone.
 
-```
-raw LFP (2500 Hz, 384 ch)
-  └─ 1. Bad-channel detection
-  └─ 2. Dephasing
-  └─ 3. Highpass filter
-  └─ 4. Bad-channel interpolation
-  └─ 5. CAR
-  └─ 6. Decimation  → 250 Hz
-  └─ 7. Cadzow denoising
-  └─ 8. Adaptive SVD + wavelet-packet thresholding
-```
+## Preprocessing
 
-Stages 1–6 constitute standard LFP preprocessing; stages 7–8 are the codec itself.
+| Step | What | Why |
+|---|---|---|
+| Saturation | ADC-clipped spans detected on the raw band (amplitude only), stored as an interval table | Found before filtering smears them; muted at the end |
+| Bad channels | `ibldsp.voltage.detect_bad_channels_cbin` [@ibl2022spike]: good, dead, noisy, outside the brain; stored as `labels` | Incoherent channels inflate the SVD noise floor |
+| Dephasing | NP1 per-channel sub-sample shift (`ibldsp.fourier.fshift`) | Aligns the channels' sampling times |
+| Highpass | 0.5 Hz zero-phase Butterworth, recording ends apodised | Removes drift, keeps delta and infra-slow activity |
+| Interpolation | Bad channels replaced from their neighbours | |
+| CAR | Median across channels subtracted | Common-mode noise |
+| Decimation | 2500 → 250 Hz FIR (`q=10`) | The LFP band sits well below 125 Hz |
+| Cadzow | F-X Cadzow denoising, when `cadzow_kwargs` is given | Removes incoherent channel noise before the SVD |
+| Muting | Saturated spans zeroed with a short cosine taper, after Cadzow | Muting earlier leaks energy back through the filters |
 
----
+F-X Cadzow works frequency bin by frequency bin (up to `fmax`): the complex channel vector
+of each spatial window is laid out as a block-Toeplitz matrix over the probe geometry,
+truncated to a low rank, and averaged back to channels. IBL runs it with
+`dict(rank=5, niter=1, fmax=None, nswx=64, ovx=32, gap_threshold=2.0, ppca_k=2.0)`.
 
-## Stage 1 — Bad-channel detection
+## Codec {#codec}
 
-Automatic per-channel quality labels are assigned before any processing:
+The 250 Hz array is cut into 8 s chunks $X_j$ (2048 samples, coded with 128 guard samples on
+each side so wavelet edge effects fall outside the written samples).
 
-| Label | Meaning |
-|---|---|
-| 0 | Good |
-| 1 | Dead (flat or disconnected) |
-| 2 | Noisy (excessive high-frequency variance) |
-| 3 | Outside brain |
+**Spatial stage.** Each chunk is factorised $X_j \approx U_j\,\mathrm{diag}(s_j)\,V_j^\top$
+with rank $r_j = \#\{k : s_k > \varepsilon\,\sigma_0\}$, where $\sigma_0$ is the median of the
+lower half of the singular values. At ε = 100 the rank is about 17. The spatial modes of a
+recording barely move over a session, so the file stores one basis $B$ (nc × 32) per
+recording and, per chunk, float16 coefficients $C_j$ with $U_j s_j \approx B\,C_j$. This costs
+< 0.01 dB of SNR and shrinks the spatial part about 20×.
 
-Labels are computed by `ibldsp.voltage.detect_bad_channels_cbin` [@ibl2022spike] and stored in the HDF5 `meta` group.
-Labelling before any preprocessing ensures the classification is not biased by later operations.
+**Temporal stage.** Each row of $V_j^\top$ is decomposed into db4 level-5 wavelet packets and
+hard-thresholded at $\tau_k = \alpha\,\sigma_0 / s_k$. Every discarded coefficient therefore
+costs less than $\alpha\,\sigma_0$ of reconstruction error, whatever the mode, and strong
+modes keep more temporal detail than weak ones. The dominant row always keeps its
+`floor_k = 64` largest coefficients so a low-SNR chunk never decodes to zero; a muted chunk
+still decodes to exactly zero.
 
----
+## Choosing ε and α
 
-## Stage 2 — Dephasing
+Measured on 11 IBL NP1 recordings, with behaviour decoding (wheel speed from LFP band power)
+run on every reconstruction:
 
-NP1 probes sample channels on a rolling basis, introducing a per-channel fractional-sample time offset.
-Each channel is phase-rotated in the frequency domain by `ibldsp.fourier.fshift` to align all channels to a common time reference before filtering.
-This stage is skipped for NP2 probes (sampling at 30_000 Hz gives a negligible time shift).
+![File size vs change in wheel-speed R² (top) and SNR (bottom) against the former 0.4 "mild" tier (ε = 100, α = 14, per-chunk U), mean ± s.e.m. over 11 recordings. Left: rank threshold ε; right: basis size and coefficient precision. Dotted: uncompressed data.](../figures/codec_pareto.png){.lightbox}
 
-Without dephasing, high-frequency coherent signals appear artificially phase-shifted across the probe, which inflates the SVD rank and increases file size.
-
----
-
-## Stage 3 — Highpass filter
-
-A 3rd-order zero-phase Butterworth highpass at 2 Hz removes slow DC drifts.
-The cutoff is set below the theta band (4–8 Hz) to preserve all physiologically relevant LFP content while eliminating low-frequency movement artefacts and electrode drift.
-
-`scipy.signal.sosfiltfilt` is used for zero-phase (non-causal) filtering.
-
-**Parameter:** `highpass_cutoff` (default `2.0` Hz)
-
----
-
-## Stage 4 — Bad-channel interpolation
-
-Dead and noisy channels are replaced by a distance-weighted average of their nearest good neighbours (`ibldsp.voltage.interpolate_bad_channels`).
-
-Without interpolation, bad channels contain incoherent noise that:
-- inflates the SVD noise-floor estimate, causing the rank to be underestimated for good channels;
-- adds energy that wavelet-packet thresholding cannot compress efficiently.
-
-Interpolated channels are flagged in the metadata so downstream users can treat them appropriately.
-
----
-
-## Stage 5 — CAR (common-average reference)
-
-The spatial median across all good channels is subtracted sample-by-sample from the full-bandwidth (2500 Hz) signal.
-This removes common-mode electrical noise (ground loops, movement artefacts) shared across all electrodes.
-
-CAR is applied before decimation so that the anti-aliasing filter sees a signal with already-reduced common-mode energy.
-
-**Parameter:** `car` — enable/disable this stage (default `True`)
-
----
-
-## Stage 6 — Decimation (2500 → 250 Hz)
-
-The signal is downsampled using `scipy.signal.decimate` (FIR anti-aliasing).
-Processing uses overlapping 512-sample halos to prevent edge transients from propagating between chunks.
-
-Decimating from 2500 Hz to 250 Hz reduces the temporal dimension by 10× before the SVD stage, which dramatically improves both the SVD compression ratio and processing speed.
-The 250 Hz Nyquist is well above the LFP band of interest (0–120 Hz for most analyses).
-
-A `.npy` checkpoint is written after this stage so that subsequent runs (e.g., with different codec parameters) can skip directly to stage 7.
-
-**Parameter:** `q` — decimation factor (default `10`, 2500 → 250 Hz)
-
----
-
-## Stage 7 — F-X Cadzow denoising
-
-F-X Cadzow denoising (`ibldsp.cadzow.cadzow_denoiser`) removes incoherent channel noise.
-Rather than applying SVD to the full time × channel matrix, the algorithm enforces
-a low-rank structure in the frequency–space domain, frequency bin by frequency bin.
-
-1. **rfft** the snippet → complex array $W \in \mathbb{C}^{n_c \times n_f}$.
-2. For each frequency bin $f \leq f_\text{max}$, extract the spatial vector $w_f \in \mathbb{C}^{n_c}$ (one complex amplitude per channel).
-3. Build a **block-Toeplitz trajectory matrix** $T_f$ from $w_f$.
-4. Compute the rank-$r$ SVD of $T_f$, zero the remaining singular values, and read off the denoised amplitudes.
-5. **irfft** back to the time domain.
-
-
-**Parameters:** `cadzow_rank` (default `5`), `cadzow_niter` (default `1`), `cadzow_fmax` (default `100.0` Hz)
-
-Processing runs in 640-sample chunks with 64-sample halos (processed window = 768 = 3 × 256, FFT-optimal) and is parallelised across chunks with `joblib`.
-
-Cadzow denoising before SVD serves two purposes:
-1. It reduces the effective rank of the data, so the SVD stage needs fewer components to capture the signal.
-2. It allows a lower SVD rank threshold (smaller ε), giving more aggressive compression without increasing residuals.
-
-See the [gallery](gallery.qmd) for empirical evidence that Cadzow-pre-processed data compresses significantly better.
-
----
-
-## Stage 8 — Adaptive SVD + wavelet-packet thresholding
-
-The actual codec; see the [benchmark gallery](gallery.qmd) for empirical results.
-
-**SVD (spatial compression):** each 2048-sample chunk (extended by 128-sample guard bands each side) is factorised as $X \approx U_r \, \text{diag}(s_r) \, V_r^\top$. Rank $r$ is selected by keeping singular values above a noise-floor-relative threshold $\varepsilon$:
-
-$$r = \#\{k : s_k > \varepsilon \cdot \sigma_\text{noise}\}$$
-
-The stored quantity is `U_scaled = U[:, :r] * sv[:r]`.
-
-**Wavelet-packet thresholding (temporal compression):** each of the $r$ rows of $V_r^\top$ is decomposed with a db4 wavelet-packet tree (level 5). Per-component hard thresholding retains only coefficients above:
-
-$$\tau_k = \frac{\alpha \cdot \sigma_\text{noise}}{s_k}$$
-
-This ensures dominant spatial modes receive finer temporal detail than weak modes, and that every discarded coefficient contributes less than $\alpha \sigma_\text{noise}$ to the reconstruction error.
-
-Non-zero coefficients are stored as sparse index/value pairs in HDF5.
-
-**Survival floor.** Because each row of $V_r^\top$ has unit norm, its wavelet-packet coefficients have a fixed magnitude ceiling ($\max_j|w_{kj}| \approx 0.2\text{–}0.4$). On low-SNR chunks — where even the dominant mode is weak, $s_0/\sigma_\text{noise} \lesssim \alpha/\max_j|w_{0j}| \approx 140$ — the threshold exceeds every coefficient and the whole chunk reconstructs to exact zero, silently discarding real low-amplitude LFP. To prevent this the dominant mode ($k=0$) always keeps its `floor_k` largest coefficients. The floor is a no-op on high-SNR recordings (their dominant row keeps far more than `floor_k`, so their output is bit-for-bit unchanged) and on saturation-muted spans, which enter as all-zero and still reconstruct to zero ($s_0 = 0 \Rightarrow$ `U_scaled` $= 0$).
-
-**Parameters:** `epsilon` — SVD noise threshold multiplier (default `150`); `alpha` — WP threshold multiplier (default `28`); `floor_k` — minimum WP coefficients kept on the dominant mode (default `64`)
-
-### Guard bands
-
-- **Cadzow halos:** 64 samples on each side of each 640-sample chunk.
-- **SVD/WP overlap:** 128 samples on each side of each 2048-sample chunk.
-
-These overlapping buffers prevent edge transients from propagating into the stored data.
+- **α sets decoding quality**, and nothing else does: at equal α the shared basis and
+  per-chunk U decode identically. The defaults are ε = 100 and α = 7; see the
+  [table on the home page](../index.qmd#choosing-α) for α = 14 and 2.5.
+- **More rank does not pay**: ε = 70 matches ε = 100 and ε = 50 is slightly worse per byte.
+- **The spatial part is exhausted at m ≈ 24–32** vectors (1–4 % of the file); m = 16
+  loses up to 1.6 dB.
+- **Keep the coefficients in float16**: int8 saves 1–5 % of the bytes at unchanged SNR but
+  degrades decoding on most recordings. SNR is a poor proxy for decoding.

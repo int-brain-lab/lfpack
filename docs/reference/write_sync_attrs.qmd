@@ -1,0 +1,27 @@
+# write_sync_attrs { #lfpack.write_sync_attrs }
+
+```python
+write_sync_attrs(meta_group, sample_knots, time_knots)
+```
+
+Write ALF sync knots plus a derived affine summary to a ``meta`` HDF5 group.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name         | Type       | Description                                                                                                                              | Default    |
+|--------------|------------|------------------------------------------------------------------------------------------------------------------------------------------|------------|
+| meta_group   | h5py.Group | The scale's ``meta`` group (``f'{recording}/{scale:02d}/meta'``).                                                                        | _required_ |
+| sample_knots | array_like | Sample-index knots, in this scale's own native sample-index units (rate-scaled per scale, matching the existing ``fs_sync`` convention). | _required_ |
+| time_knots   | array_like | Session-clock time knots [s], one per ``sample_knots`` entry.                                                                            | _required_ |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type                     | Description                                                                                                                                                                            |
+|--------|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|        | t0_sync, fs_sync : float | The least-squares affine derived from the knots and written alongside them, so ``.t0``/``.fs`` and any direct-attrs reader (e.g. ``qc_report.py``) keep seeing a plain scalar summary. |
+
+## Raises {.doc-section .doc-section-raises}
+
+| Name   | Type       | Description            |
+|--------|------------|------------------------|
+|        | ValueError | See `_validate_knots`. |

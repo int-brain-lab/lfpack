@@ -26,9 +26,23 @@ def _synthetic_lfp(nc=32, ns=500):
     return (spatial @ temporal + noise).astype(np.float32)
 
 
+def _write_chunks_v1(scale_group, results):
+    """Write chunks as format-1 per-chunk groups (lfpack no longer writes format 1)."""
+    from lfpack._legacy import _ATTRS
+
+    cg = scale_group.create_group("chunks")
+    for ci, res in enumerate(results):
+        grp = cg.create_group(str(ci))
+        for name in ("U_scaled", "vh_indices", "vh_values"):
+            grp.create_dataset(name, data=res[name], compression="gzip", shuffle=True)
+        grp.attrs["vh_shape"] = res["vh_shape"]
+        for name in _ATTRS:
+            grp.attrs[name] = res[name]
+
+
 def _write_v1_copy(src_h5, dst_h5):
     """Rewrite every scale of a format-2 archive as format-1 per-chunk groups."""
-    from lfpack import _container, _legacy
+    from lfpack import _container
 
     with h5py.File(src_h5, "r") as src, h5py.File(dst_h5, "w") as dst:
         for rec in src:
@@ -57,7 +71,7 @@ def _write_v1_copy(src_h5, dst_h5):
                             **{k: c[k] for k in ("cr_svd", "cr_wp", "cr_total")},
                         )
                     )
-                _legacy.write_chunks_v1(scale, results)
+                _write_chunks_v1(scale, results)
 
 
 class TestLfpack(unittest.TestCase):
@@ -430,7 +444,7 @@ class TestLFPackReaderAPI(unittest.TestCase):
         np.testing.assert_array_equal(a, b)
 
     def test_upgrade_h5(self):
-        """upgrade_h5 turns format 1 into format 2 without changing the decoded samples."""
+        """upgrade_h5 turns format 1 into format 2; only the float16 basis coefficients change."""
         v1 = self.tmp_path / "v1.h5"
         _write_v1_copy(self.h5, v1)
         v2 = lfpack.upgrade_h5(v1, self.tmp_path / "v2.h5")
@@ -440,7 +454,7 @@ class TestLFPackReaderAPI(unittest.TestCase):
             self.assertNotIn("chunks", f["r/00"])
         a, _ = lfpack.LFPackReader(v1).read_samples(0, self.NS)
         b, _ = lfpack.LFPackReader(v2).read_samples(0, self.NS)
-        np.testing.assert_array_equal(a, b)
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-3 * np.abs(a).max())
 
     def test_random_access_matches_full_read(self):
         """A read straddling a chunk boundary equals the same span of a full read."""
@@ -635,6 +649,83 @@ class TestLFPackReaderAPI(unittest.TestCase):
             self.assertAlmostEqual(float(t[n]), expected, places=9)
         # scalar input takes the same path
         self.assertAlmostEqual(sr._sample_to_time(self.NS - 1), sr.t0 + (self.NS - 1) / sr.fs, places=9)
+
+
+class TestSharedBasis(unittest.TestCase):
+    """Shared spatial basis of format 2: layout, fidelity against a complete basis, muting, upgrade."""
+
+    NC = 32
+    NS = 1024  # 4 chunks at CHUNK=256
+    CHUNK = 256
+    OVERLAP = 32
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        data = _synthetic_lfp(nc=self.NC, ns=self.NS)
+        data[:, 224:544] = 0  # one muted chunk, guard bands included
+        self.npy = self.tmp_path / "ck.npy"
+        np.save(self.npy, data.T.astype(np.float32))
+        self.h = {"x": np.zeros(self.NC, dtype=np.float32), "y": np.arange(self.NC, dtype=np.float32) * 25.0}
+        # a complete basis (m = nc) only rounds the coefficients to float16: the per-chunk codec
+        self.ref = self._write("ref.h5", basis_size=self.NC)
+        self.ref_data, _ = lfpack.LFPackReader(self.ref).read_samples(0, self.NS)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, name, basis_size):
+        h5 = self.tmp_path / name
+        lfpack.compress_to_h5(
+            self.npy, h5, recording="r", h=self.h, chunk=self.CHUNK, overlap=self.OVERLAP, n_jobs=1,
+            basis_size=basis_size,
+        )  # fmt: skip
+        return h5
+
+    def test_layout(self):
+        """basis (nc, m) float32, float16 u_values of sum m·rank, u_norms of sum rank, basis_size attr."""
+        with h5py.File(self._write("b.h5", basis_size=4), "r") as f:
+            codec, rank = f["r/00/codec"], f["r/00/codec/chunk_table"]["rank"].astype(int)
+            self.assertEqual(codec["basis"].shape, (self.NC, 4))
+            self.assertEqual(codec["basis"].dtype, np.float32)
+            self.assertEqual(codec["u_values"].dtype, np.float16)
+            self.assertEqual(codec["u_values"].shape, (4 * rank.sum(),))
+            self.assertEqual(codec["u_norms"].shape, (rank.sum(),))
+            self.assertEqual(int(f["r/00/meta"].attrs["basis_size"]), 4)
+            basis = codec["basis"][()].astype(np.float64)
+            np.testing.assert_allclose(basis.T @ basis, np.eye(4), atol=1e-5)
+
+    def test_fidelity(self):
+        """The synthetic signal is rank 3: a 4-vector basis decodes as the complete one."""
+        data, _ = lfpack.LFPackReader(self._write("b.h5", basis_size=4)).read_samples(0, self.NS)
+        err = np.sum((data.astype(np.float64) - self.ref_data) ** 2)
+        self.assertGreater(10 * np.log10(np.sum(self.ref_data.astype(np.float64) ** 2) / err), 40)
+
+    def test_muted_chunk_stays_zero(self):
+        data, _ = lfpack.LFPackReader(self._write("b.h5", basis_size=4)).read_samples(256, 512)
+        np.testing.assert_array_equal(data, 0)
+
+    def test_basis_size_clipped_to_nc(self):
+        with h5py.File(self._write("b.h5", basis_size=1000), "r") as f:
+            self.assertEqual(f["r/00/codec/basis"].shape, (self.NC, self.NC))
+
+    def test_merge_and_random_access(self):
+        """merge_h5 carries the basis; a read straddling chunks matches the full read."""
+        merged = self.tmp_path / "m.h5"
+        lfpack.merge_h5([self._write("b.h5", basis_size=4)], merged)
+        sr = lfpack.LFPackReader(merged, recording="r")
+        full, _ = sr.read_samples(0, self.NS)
+        part, _ = sr.read_samples(200, 700)
+        np.testing.assert_array_equal(part, full[200:700])
+
+    def test_upgrade_h5_matches_direct_write(self):
+        """upgrade_h5(basis_size=m) of a format-1 file decodes as writing format 2 directly."""
+        v1 = self.tmp_path / "v1.h5"
+        _write_v1_copy(self.ref, v1)
+        up = lfpack.upgrade_h5(v1, self.tmp_path / "up.h5", basis_size=4)
+        a, _ = lfpack.LFPackReader(up).read_samples(0, self.NS)
+        b, _ = lfpack.LFPackReader(self._write("b.h5", basis_size=4)).read_samples(0, self.NS)
+        np.testing.assert_allclose(a, b, rtol=0, atol=1e-3 * np.abs(b).max())
 
 
 class TestMergeH5(unittest.TestCase):

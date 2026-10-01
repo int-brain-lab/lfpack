@@ -16,4 +16,5 @@ from lfpack._core import (  # noqa: F401
     run_cadzow_checkpoint,
     subset_h5,
 )
+from lfpack._legacy import upgrade_h5  # noqa: F401
 from lfpack._sync import SYNC_ATTRS, clear_sync_attrs, write_sync_attrs  # noqa: F401

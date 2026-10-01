@@ -28,7 +28,7 @@ quarto preview docs/
 
 ## Architecture
 
-Nearly all code lives in `src/lfpack/_core.py` (~1700 lines). Non-linear sync knot storage (`write_sync_attrs`/`clear_sync_attrs`) lives in the small `src/lfpack/_sync.py` module. The public API is re-exported from `src/lfpack/__init__.py`.
+Nearly all code lives in `src/lfpack/_core.py` (~1700 lines); the HDF5 codec container is in `src/lfpack/_container.py` and format-1 support in `src/lfpack/_legacy.py`. Non-linear sync knot storage (`write_sync_attrs`/`clear_sync_attrs`) lives in the small `src/lfpack/_sync.py` module. The public API is re-exported from `src/lfpack/__init__.py`.
 
 ### Compression pipeline (`compress_bin_to_h5`)
 
@@ -64,9 +64,15 @@ Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge t
    └─ <scale_2digit>/
       ├─ meta         # attrs: nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
       │               # optional child datasets: sync_samples, sync_times (gzip+shuffle)
-      └─ chunks/
-         └─ <i>/      # U_scaled, vh_indices, vh_values + attrs
+      └─ codec/       # format 2 (meta.attrs["format_version"] == 2), see _container.py:
+                      # chunk_table (per-chunk rank, n_kept, ...), u_values, vh_deltas, vh_values
 ```
+
+Format 2 concatenates all 8 s codec chunks into flat datasets (offsets = cumsum of `nc·rank` and
+`n_kept`), so random access is kept while the per-chunk HDF5 overhead of format 1 disappears; it
+also drops Vh coefficients that only reconstruct the guard bands (decoded output unchanged).
+Format 1 (`chunks/<i>/` groups with `U_scaled`, `vh_indices`, `vh_values`) is still read; all of its
+code lives in `_legacy.py` (reader, v1 writer for tests, `upgrade_h5`) so it can be deleted in one go.
 
 The `saturation` node sits at recording level (not under a scale) because it describes the raw recording, not a codec pyramid level; `merge_h5` copies it automatically. Legacy flat layout (meta at root) is still readable for backwards compatibility.
 

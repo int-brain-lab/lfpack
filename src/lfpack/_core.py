@@ -286,15 +286,48 @@ def decompress(compressed: LFPCompressed, bin_channels: int = 1) -> np.ndarray:
     return np.nan_to_num(x_hat, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
+def cadzow_lfp_kwargs(h: dict, **kwargs) -> dict:
+    """
+    Cadzow LFP settings for a probe geometry: the defaults of the ibldsp NP1 or NP2 entry point.
+
+    NP1 channels sit on a checkerboard (2 of the 4 lateral positions per row), so their lateral x depth grid has empty
+    positions: ``ibldsp.cadzow.LFP_KWARGS_NP1`` (full grid + shrinkage), as `cadzow_denoiser_np1`.  Probes whose
+    channels fill their grid (NP2 single shank) get ``ibldsp.cadzow.LFP_KWARGS_NP2`` (shrinkage), as
+    `cadzow_denoiser_np2`.
+
+    Parameters
+    ----------
+    h : dict
+        Probe header with keys 'x' and 'y' (channel coordinates [µm]).
+    **kwargs
+        Overrides of the defaults, forwarded to ``ibldsp.cadzow.cadzow_denoiser``.
+
+    Returns
+    -------
+    dict
+        ``ibldsp.cadzow.cadzow_denoiser`` keyword arguments.
+
+    Raises
+    ------
+    ValueError
+        If channels share a position (multi-shank probes with per-shank coordinates): Cadzow needs one shank at a time.
+    """
+    x, y = np.asarray(h["x"]), np.asarray(h["y"])
+    if np.unique(np.c_[x, y], axis=0).shape[0] != x.size:
+        raise ValueError("Cadzow requires unique channel positions; process multi-shank probes one shank at a time")
+    full_grid = np.unique(x).size * np.unique(y).size == x.size
+    return {**(_cadzow.LFP_KWARGS_NP2 if full_grid else _cadzow.LFP_KWARGS_NP1), **kwargs}
+
+
 def compress_pipeline(
     data: np.ndarray,
     h: dict | None = None,
     epsilon: float = 100.0,
     alpha: float = 7.0,
     fs: float = 250.0,
-    cadzow_rank: int = 5,
-    cadzow_niter: int = 1,
-    cadzow_fmax: float = 100.0,
+    cadzow_rank: int | None = None,
+    cadzow_niter: int | None = None,
+    cadzow_fmax: float | None = None,
 ) -> tuple[np.ndarray, LFPCompressed]:
     """
     Full LFP compression pipeline: Cadzow denoise → SVD-adapt → WP threshold.
@@ -313,12 +346,12 @@ def compress_pipeline(
         WP threshold multiplier.  Default 7.
     fs : float
         LFP sampling rate [Hz].  Default 250.
-    cadzow_rank : int
-        Spatial de-rank applied by the Cadzow denoiser.  Default 5.
-    cadzow_niter : int
-        Number of Cadzow iterations.  Default 1.
-    cadzow_fmax : float
-        Maximum frequency passed to the Cadzow denoiser [Hz].  Default 100.
+    cadzow_rank : int or None
+        Maximum Cadzow rank.  None uses the default for the geometry (5, see `cadzow_lfp_kwargs`).
+    cadzow_niter : int or None
+        Number of Cadzow iterations.  None uses the default for the geometry (1).
+    cadzow_fmax : float or None
+        Maximum frequency passed to the Cadzow denoiser [Hz].  None processes all bins (the default for the geometry).
 
     Returns
     -------
@@ -332,14 +365,9 @@ def compress_pipeline(
         _h = neuropixel.trace_header(version=1)
         h = {k: v[:nc] for k, v in _h.items()}
 
-    denoised = _cadzow.cadzow_denoiser(
-        data,
-        h=h,
-        fs=fs,
-        rank=cadzow_rank,
-        niter=cadzow_niter,
-        fmax=cadzow_fmax,
-    )
+    overrides = dict(rank=cadzow_rank, niter=cadzow_niter, fmax=cadzow_fmax)
+    overrides = {k: v for k, v in overrides.items() if v is not None}
+    denoised = _cadzow.cadzow_denoiser(data, h=h, fs=fs, **cadzow_lfp_kwargs(h, **overrides))
     compressed = compress(denoised, epsilon=epsilon, alpha=alpha)
     return decompress(compressed), compressed
 
@@ -371,19 +399,7 @@ def _cadzow_worker(job):
     left_halo = i0_w - i0_r
 
     snippet = np.asarray(data[i0_r:i1_r, :], dtype=np.float32).T  # (nc, processed)
-    denoised = _cadzow_proc.cadzow_denoiser(
-        snippet,
-        h=job["h"],
-        fs=job["fs"],
-        rank=job["rank"],
-        niter=job["niter"],
-        fmax=job["fmax"],
-        nswx=job["nswx"],
-        ovx=job["ovx"],
-        gap_threshold=job["gap_threshold"],
-        ppca_k=job["ppca_k"],
-        n_jobs=1,
-    )
+    denoised = _cadzow_proc.cadzow_denoiser(snippet, h=job["h"], fs=job["fs"], **job["cadzow_kwargs"], n_jobs=1)
     out[i0_w:i1_w, :] = denoised[:, left_halo : left_halo + (i1_w - i0_w)].T
     out.flush()
     return ci
@@ -396,14 +412,8 @@ def run_cadzow_checkpoint(
     fs=250.0,
     chunk=_CADZOW_CHUNK,
     halo=_CADZOW_HALO,
-    rank=5,
-    niter=1,
-    fmax=None,
-    nswx=64,
-    ovx=32,
-    gap_threshold=2.0,
-    ppca_k=2.0,
     n_jobs=4,
+    **cadzow_kwargs,
 ):
     """
     Cadzow-denoise a decimated LFP array in overlapping chunks and save a contiguous checkpoint.
@@ -427,24 +437,12 @@ def run_cadzow_checkpoint(
         Default 640 → processed window = 640 + 2×64 = 768 = 3 × 256.
     halo : int
         Context halo each side (samples).  Default 64.
-    rank : int
-        Cadzow SVD rank.  Default 5.
-    niter : int
-        Number of Cadzow iterations.  Default 1.
-    fmax : float or None
-        Max frequency for Cadzow [Hz].  None → Nyquist.  Default None.
-    nswx : int
-        Cadzow channel-window width.  Default 64.
-    ovx : int
-        Cadzow channel-window overlap.  Default 32 (50% of nswx).
-    gap_threshold : float
-        Adaptive-rank gap threshold.  Default 2.0.
-    ppca_k : float
-        PPCA outlier-suppression threshold.  Default 2.0.
     n_jobs : int
         Number of chunks processed in parallel via ProcessPoolExecutor.  Each
         worker subprocess calls cadzow_denoiser with n_jobs=1 and writes its
         result directly to the output memmap.  Default 4.
+    **cadzow_kwargs
+        Overrides of the Cadzow defaults for the probe geometry (see `cadzow_lfp_kwargs`).
 
     Returns
     -------
@@ -482,13 +480,7 @@ def run_cadzow_checkpoint(
         halo=halo,
         h=h,
         fs=fs,
-        rank=rank,
-        niter=niter,
-        fmax=fmax,
-        nswx=nswx,
-        ovx=ovx,
-        gap_threshold=gap_threshold,
-        ppca_k=ppca_k,
+        cadzow_kwargs=cadzow_lfp_kwargs(h, **cadzow_kwargs),
     )
     jobs = [{**shared, "ci": ci} for ci in range(n_chunks)]
 
@@ -923,9 +915,9 @@ def compress_bin_to_h5(
         If None a temporary file is written next to out_h5 and deleted afterwards.
         If the file already exists the decimate+Cadzow step is skipped entirely.
     cadzow_kwargs : dict or None
-        Forwarded to resample_denoise_lfp_cbin as cadzow_kwargs; keys match
-        ibldsp.cadzow.cadzow_denoiser parameters (rank, niter, fmax, nswx, ovx,
-        gap_threshold, ppca_k).  Default None disables Cadzow (pure decimation).
+        Enables Cadzow denoising with the defaults for the probe geometry (NP1 or NP2, see
+        `cadzow_lfp_kwargs`); its keys override them (``ibldsp.cadzow.cadzow_denoiser``
+        parameters).  Pass ``{}`` for the defaults.  Default None disables Cadzow (pure decimation).
     channel_labels : np.ndarray or None
         Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain).
         If None and the checkpoint does not exist, labels are auto-detected via
@@ -1084,7 +1076,7 @@ def compress_bin_to_h5(
             channel_labels=channel_labels,
             highpass_cutoff=highpass_cutoff,
             car=car,
-            cadzow_kwargs=cadzow_kwargs,
+            cadzow_kwargs=None if cadzow_kwargs is None else cadzow_lfp_kwargs(h, **cadzow_kwargs),
             n_jobs=n_jobs,
             saturation_file=saturation_file,
             mute_window_samples=sat_mute_window,

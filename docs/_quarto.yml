@@ -55,6 +55,7 @@ quartodoc:
         - compress
         - decompress
         - run_cadzow_checkpoint
+        - cadzow_lfp_kwargs
     - title: "Data types"
       desc: "Core data structures."
       contents:

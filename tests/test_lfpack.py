@@ -953,6 +953,21 @@ class TestCompressPipeline(unittest.TestCase):
         self.assertEqual(reconstructed.shape, self.data.shape)
 
 
+class TestCadzowLfpKwargs(unittest.TestCase):
+    """Routing of the Cadzow settings by probe geometry."""
+
+    def test_routing(self):
+        import neuropixel
+        from ibldsp import cadzow
+
+        h1, h2 = neuropixel.trace_header(version=1), neuropixel.trace_header(version=2)
+        self.assertEqual(lfpack.cadzow_lfp_kwargs(h1), cadzow.LFP_KWARGS_NP1)  # checkerboard
+        self.assertEqual(lfpack.cadzow_lfp_kwargs(h2), cadzow.LFP_KWARGS_NP2)  # full grid
+        self.assertEqual(lfpack.cadzow_lfp_kwargs(h1, rank=3)["rank"], 3)
+        with self.assertRaises(ValueError):  # per-shank coordinates repeat across shanks
+            lfpack.cadzow_lfp_kwargs(neuropixel.trace_header(version=2, nshank=4))
+
+
 class TestSaturationTable(unittest.TestCase):
     """Saturation intervals storage in compress_to_h5 and the LFPackReader access API."""
 

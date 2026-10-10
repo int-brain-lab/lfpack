@@ -39,7 +39,7 @@ Nearly all code lives in `src/lfpack/_core.py` (~1700 lines); the HDF5 codec con
 4. Bad-channel interpolation — distance-weighted neighbors
 5. CAR — median subtraction across channels
 6. Decimation — 2500 → 250 Hz (Q=10)
-7. Cadzow denoising — spatial rank reduction (`ibldsp.cadzow`)
+7. Cadzow denoising — spatial rank reduction (`ibldsp.cadzow`); settings routed by geometry with `cadzow_lfp_kwargs` (NP1 checkerboard → `LFP_KWARGS_NP1`, full grid such as NP2 → `LFP_KWARGS_NP2`), `cadzow_kwargs` keys override them; multi-shank probes are refused
 8. **Adaptive SVD + wavelet-packet thresholding** — the actual codec
 
 Steps 6–7 are checkpointed to a `.npy` file so the expensive decimation can be skipped on resume. Steps 7–8 are parallelised with `joblib`. Muting (step 0): a raw-rate boolean saturation mask is passed to `resample_denoise_lfp_cbin` as `saturation_file`; each worker downsamples its slice of the mask onto the decimated grid (block-max over each Q-sample block), cosine-tapers it (`mute_window_samples`, now in **decimated** output samples) and multiplies the **decimated output *after* Cadzow** by it. This *late* muting replaced the earlier pre-filter approach: muting the raw traces before the highpass/CAR/decimate/Cadzow did not keep the span clean — those stages leaked energy back into it (residual noise, spurious CSD sources/sinks); a single re-mute of the final output is cleaner and cheaper. Muting is skipped when resuming from an existing checkpoint (data already decimated); the interval table is still written.

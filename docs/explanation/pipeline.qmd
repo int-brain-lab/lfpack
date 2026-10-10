@@ -23,8 +23,12 @@ codec. `compress_to_h5` runs the codec alone.
 
 F-X Cadzow works frequency bin by frequency bin (up to `fmax`): the complex channel vector
 of each spatial window is laid out as a block-Toeplitz matrix over the probe geometry,
-truncated to a low rank, and averaged back to channels. IBL runs it with
-`dict(rank=5, niter=1, fmax=None, nswx=64, ovx=32, gap_threshold=2.0, ppca_k=2.0)`.
+truncated to a low rank, and averaged back to channels. The settings follow the probe geometry
+(`cadzow_lfp_kwargs`): `rank=5, niter=1, fmax=None, nswx=64, ovx=32, ppca_k=2.0` with
+Gavish-Donoho singular-value shrinkage, on the full lateral × depth grid for the NP1 checkerboard
+(`ibldsp.cadzow.LFP_KWARGS_NP1`) and on the channels for NP2 (`LFP_KWARGS_NP2`).
+`cadzow_kwargs={}` uses them; its keys override them. Bad channels are left to Cadzow, which estimates
+them from its fit (`bad_channels_as_missing`), instead of being interpolated again after it.
 
 ## Codec {#codec}
 

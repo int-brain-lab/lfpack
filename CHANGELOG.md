@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Cadzow settings are routed by probe geometry (`cadzow_lfp_kwargs`: NP1 or NP2 LFP defaults of ibldsp, which remove the CSD window seams); `cadzow_kwargs` / `run_cadzow_checkpoint` keywords override them. `compress_bin_to_h5` lets Cadzow estimate the bad channels (`bad_channels_as_missing`) instead of interpolating them.
+
 ## [1.0.0] - 2026-10-01
 
 ### Changed

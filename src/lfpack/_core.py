@@ -917,7 +917,10 @@ def compress_bin_to_h5(
     cadzow_kwargs : dict or None
         Enables Cadzow denoising with the defaults for the probe geometry (NP1 or NP2, see
         `cadzow_lfp_kwargs`); its keys override them (``ibldsp.cadzow.cadzow_denoiser``
-        parameters).  Pass ``{}`` for the defaults.  Default None disables Cadzow (pure decimation).
+        parameters).  Pass ``{}`` for the defaults.  The dead and noisy channels are estimated by
+        Cadzow (``bad_channels_as_missing=True`` of ``resample_denoise_lfp_cbin``) instead of being
+        interpolated after it; pass ``bad_channels_as_missing=False`` to interpolate.  Default None
+        disables Cadzow (pure decimation).
     channel_labels : np.ndarray or None
         Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain).
         If None and the checkpoint does not exist, labels are auto-detected via
@@ -1076,7 +1079,9 @@ def compress_bin_to_h5(
             channel_labels=channel_labels,
             highpass_cutoff=highpass_cutoff,
             car=car,
-            cadzow_kwargs=None if cadzow_kwargs is None else cadzow_lfp_kwargs(h, **cadzow_kwargs),
+            cadzow_kwargs=None
+            if cadzow_kwargs is None
+            else {"bad_channels_as_missing": True, **cadzow_lfp_kwargs(h, **cadzow_kwargs)},
             n_jobs=n_jobs,
             saturation_file=saturation_file,
             mute_window_samples=sat_mute_window,

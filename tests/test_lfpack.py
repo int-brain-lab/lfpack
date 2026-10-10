@@ -967,6 +967,40 @@ class TestCadzowLfpKwargs(unittest.TestCase):
         with self.assertRaises(ValueError):  # per-shank coordinates repeat across shanks
             lfpack.cadzow_lfp_kwargs(neuropixel.trace_header(version=2, nshank=4))
 
+    def test_compress_bin_to_h5_forwards_routed_kwargs(self):
+        """compress_bin_to_h5 sends the geometry defaults to the chunk worker, with the bad channels left to Cadzow."""
+        from unittest import mock
+
+        import neuropixel
+        from ibldsp import cadzow
+
+        h1 = neuropixel.trace_header(version=1)
+        sr = mock.MagicMock(nc=385, nsync=1, fs=2500.0, meta={})
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("lfpack._core._spikeglx.Reader", return_value=sr),
+            mock.patch("lfpack._core._spikeglx.geometry_from_meta", return_value=h1),
+            mock.patch("ibldsp.voltage.resample_denoise_lfp_cbin") as resample,
+            mock.patch("lfpack._core.compress_to_h5"),
+        ):
+            for cadzow_kwargs, expected in (
+                ({}, {**cadzow.LFP_KWARGS_NP1, "bad_channels_as_missing": True}),
+                (
+                    {"rank": 3, "bad_channels_as_missing": False},
+                    {**cadzow.LFP_KWARGS_NP1, "rank": 3, "bad_channels_as_missing": False},
+                ),
+                (None, None),
+            ):
+                lfpack.compress_bin_to_h5(
+                    Path(tmp).joinpath("x.cbin"),
+                    Path(tmp).joinpath("x.h5"),
+                    cadzow_checkpoint_file=Path(tmp).joinpath("ckpt.npy"),
+                    cadzow_kwargs=cadzow_kwargs,
+                    channel_labels=np.zeros(384, dtype=int),
+                    detect_saturation=False,
+                )
+                self.assertEqual(resample.call_args.kwargs["cadzow_kwargs"], expected)
+
 
 class TestSaturationTable(unittest.TestCase):
     """Saturation intervals storage in compress_to_h5 and the LFPackReader access API."""

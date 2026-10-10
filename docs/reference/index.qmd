@@ -12,6 +12,7 @@ Compress LFP recordings to HDF5.
 | [compress](compress.qmd#lfpack.compress) | Compress an LFP snippet using adaptive SVD and wavelet-packet thresholding. |
 | [decompress](decompress.qmd#lfpack.decompress) | Reconstruct LFP data from a compressed representation. |
 | [run_cadzow_checkpoint](run_cadzow_checkpoint.qmd#lfpack.run_cadzow_checkpoint) | Cadzow-denoise a decimated LFP array in overlapping chunks and save a contiguous checkpoint. |
+| [cadzow_lfp_kwargs](cadzow_lfp_kwargs.qmd#lfpack.cadzow_lfp_kwargs) | Cadzow LFP settings for a probe geometry: the defaults of the ibldsp NP1 or NP2 entry point. |
 
 ## Data types
 

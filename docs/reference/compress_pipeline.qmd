@@ -7,9 +7,9 @@ compress_pipeline(
     epsilon=100.0,
     alpha=7.0,
     fs=250.0,
-    cadzow_rank=5,
-    cadzow_niter=1,
-    cadzow_fmax=100.0,
+    cadzow_rank=None,
+    cadzow_niter=None,
+    cadzow_fmax=None,
 )
 ```
 
@@ -24,9 +24,9 @@ Full LFP compression pipeline: Cadzow denoise → SVD-adapt → WP threshold.
 | epsilon      | float                              | SVD-adapt threshold multiplier.  Default 100.                                                                                                                                                      | `100.0`    |
 | alpha        | float                              | WP threshold multiplier.  Default 7.                                                                                                                                                               | `7.0`      |
 | fs           | float                              | LFP sampling rate [Hz].  Default 250.                                                                                                                                                              | `250.0`    |
-| cadzow_rank  | int                                | Spatial de-rank applied by the Cadzow denoiser.  Default 5.                                                                                                                                        | `5`        |
-| cadzow_niter | int                                | Number of Cadzow iterations.  Default 1.                                                                                                                                                           | `1`        |
-| cadzow_fmax  | float                              | Maximum frequency passed to the Cadzow denoiser [Hz].  Default 100.                                                                                                                                | `100.0`    |
+| cadzow_rank  | int or None                        | Maximum Cadzow rank.  None uses the default for the geometry (5, see `cadzow_lfp_kwargs`).                                                                                                         | `None`     |
+| cadzow_niter | int or None                        | Number of Cadzow iterations.  None uses the default for the geometry (1).                                                                                                                          | `None`     |
+| cadzow_fmax  | float or None                      | Maximum frequency passed to the Cadzow denoiser [Hz].  None processes all bins (the default for the geometry).                                                                                     | `None`     |
 
 ## Returns {.doc-section .doc-section-returns}
 

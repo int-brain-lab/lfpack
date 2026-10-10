@@ -2,7 +2,6 @@
 
 ```python
 LFPCompressed(
-    self,
     U_scaled,
     Vh_hat,
     ns_original,

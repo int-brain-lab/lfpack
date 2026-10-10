@@ -9,6 +9,7 @@ website:
       - reference/compress.qmd
       - reference/decompress.qmd
       - reference/run_cadzow_checkpoint.qmd
+      - reference/cadzow_lfp_kwargs.qmd
       section: Compression
     - contents:
       - reference/LFPCompressed.qmd

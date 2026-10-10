@@ -26,16 +26,16 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-dependency-glob: "pyproject.toml"
 
-      - name: Set up Python
-        run: uv python install 3.14
-
+      # dependencies are resolved from pyproject.toml, not from uv.lock
       - name: Install dependencies
-        run: uv sync --group dev
+        run: |
+          uv venv --python 3.14
+          uv pip install -e . --group dev
 
       - name: Build API reference
-        run: uv run quartodoc build --config docs/_quarto.yml
+        run: .venv/bin/quartodoc build --config docs/_quarto.yml
 
       - name: Render site
         run: quarto render docs/

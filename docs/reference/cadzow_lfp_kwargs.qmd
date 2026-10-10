@@ -1,0 +1,31 @@
+# cadzow_lfp_kwargs { #lfpack.cadzow_lfp_kwargs }
+
+```python
+cadzow_lfp_kwargs(h, **kwargs)
+```
+
+Cadzow LFP settings for a probe geometry: the defaults of the ibldsp NP1 or NP2 entry point.
+
+NP1 channels sit on a checkerboard (2 of the 4 lateral positions per row), so their lateral x depth grid has empty
+positions: ``ibldsp.cadzow.LFP_KWARGS_NP1`` (full grid + shrinkage), as `cadzow_denoiser_np1`.  Probes whose
+channels fill their grid (NP2 single shank) get ``ibldsp.cadzow.LFP_KWARGS_NP2`` (shrinkage), as
+`cadzow_denoiser_np2`.
+
+## Parameters {.doc-section .doc-section-parameters}
+
+| Name     | Type   | Description                                                                | Default    |
+|----------|--------|----------------------------------------------------------------------------|------------|
+| h        | dict   | Probe header with keys 'x' and 'y' (channel coordinates [µm]).             | _required_ |
+| **kwargs |        | Overrides of the defaults, forwarded to ``ibldsp.cadzow.cadzow_denoiser``. | `{}`       |
+
+## Returns {.doc-section .doc-section-returns}
+
+| Name   | Type   | Description                                          |
+|--------|--------|------------------------------------------------------|
+|        | dict   | ``ibldsp.cadzow.cadzow_denoiser`` keyword arguments. |
+
+## Raises {.doc-section .doc-section-raises}
+
+| Name   | Type       | Description                                                                                                     |
+|--------|------------|-----------------------------------------------------------------------------------------------------------------|
+|        | ValueError | If channels share a position (multi-shank probes with per-shank coordinates): Cadzow needs one shank at a time. |

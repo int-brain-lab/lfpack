@@ -20,9 +20,10 @@ compress_bin_to_h5("my_recording.lf.cbin", "my_recording.lf.h5")
 ```
 
 This runs the [pipeline](../explanation/pipeline.qmd): saturation and bad-channel
-detection, filtering, decimation to 250 Hz and the codec; pass `cadzow_kwargs` to add Cadzow
-denoising as IBL does; with it, a 60 min 384-channel NP1 recording gives a file of about 20 MB. Pass `cadzow_checkpoint_file=` to keep
-the denoised 250 Hz array: re-running with another `alpha` then skips straight to the codec.
+detection, filtering, decimation to 250 Hz and the codec. A 60 min 384-channel NP1 recording
+gives a file of about 20 MB. Add `cadzow_kwargs={}` to denoise with Cadzow as IBL does. Pass
+`cadzow_checkpoint_file=` to keep the decimated 250 Hz array: re-running with another `alpha`
+then skips straight to the codec.
 
 ## 3. Read
 

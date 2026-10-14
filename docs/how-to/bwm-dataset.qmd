@@ -2,281 +2,124 @@
 title: "How to access the IBL Brain-Wide Map LFP dataset"
 ---
 
-The IBL Brain-Wide Map (BWM) LFP dataset is distributed as a 16GB `.h5` file
-containing 699 individual recordings of 384 channels each.
+The Brain-Wide Map (BWM) LFP dataset holds 699 recordings of 384 channels in one `.h5` file,
+published in three tiers that differ only in the wavelet threshold α
+([choosing α](../index.qmd#choosing-α)). Every file has the same layout and the same 699
+recordings.
+
+| Tier | α | File | Size | File / float32 at 250 Hz |
+|---|---:|---|---:|---:|
+| small | 14 | `lf_compressed_v04_a14_small_all_bwm.h5` | 7.7 GB | 0.57 % |
+| default | 7 | `lf_compressed_v04_a07_default_all_bwm.h5` | 14.9 GB | 1.10 % |
+| fine | 2.5 | `lf_compressed_v04_a2p5_fine_all_bwm.h5` | 31.9 GB | 2.36 % |
+
+`small` decodes wheel speed, choice, feedback and brain region about as well as the retired
+v03 `mild` tier at 0.38× its size; `fine` recovers the scores of the uncompressed signal
+for behaviour. Start with `default`. The v03 files (`lf_compressed_all_bwm.h5`,
+`lf_compressed_mild_all_bwm.h5`, `lf_compressed_aggressive_all_bwm.h5`) are format 1 and
+superseded.
 
 ## Browse online
 
 **[lfpack.internationalbrainlab.org](https://lfpack.internationalbrainlab.org/app)**
-hosts a live web viewer over the full dataset — no download or setup required.
-Pick a recording (searchable by `pid`) or filter by brain region (acronym or
-name, e.g. `VISp` or `Isocortex` — matching that region or any of its
-descendants in the Allen hierarchy), then pan/zoom the trace view and adjust
-gain. This is the fastest way to browse before writing any code.
-
-::: {.callout-warning}
-## Known Dataset limitations
-
-- **Saturation events** — ADC-clipped stretches are flagged and muted in the decompressed
-  output; check whether your window of interest overlaps one before trusting amplitude.
-  See [Quality Control - Saturation](#quality-control---saturation).
-- **Missing sync for 7 probes** — `t0_sync`/`fs_sync` could not be computed for 7 probes
-  (spanning 4 sessions) due to a session-level sync data-quality issue upstream; `sr.t0`
-  returns `NaN` for these. See [lfpack#8](https://github.com/int-brain-lab/lfpack/issues/8).
-- **High-frequency roll-off** — the SVD + wavelet-packet codec trades off power above
-  roughly 20-30 Hz for compression ratio, more so at the default tier than the mild tier.
-  See the PSD comparison below.
-- **Low-frequency channel-to-channel mismatch** — per-channel impedance/analog-filter
-  differences show up as amplitude outliers at low frequencies (below 1.5 Hz) and are not fully
-  corrected by the current pre-processing pipeline.
-
-![Average PSD across compression tiers for a representative recording — high frequencies are increasingly attenuated as compression ratio (CR) rises from cadzow-only to mild (270×) to default (461×).](../figures/2026-09-05_bwm_compression_hf_rolloff.png){.lightbox}
-:::
-
-::: {.callout-important}
-## Before you start
-
-- **Align with trial events via `sr.times`** — each recording stores a sync-corrected
-  session clock; always use `sr.times` rather than a manual `np.arange / sr.fs` when
-  matching LFP samples to spike times or trial events.
-  See [Session-clock times](#session-clock-times).
-
-- **Use binned reads for brainwide sweeps** — looping over all 699 recordings at full
-  384-channel resolution is memory-intensive. Pass `bin_channels=4` to reduce each
-  recording to 96 spatial bins with acceptable loss of depth coverage.
-  See [Binned-channel reads](#binned-channel-reads).
-:::
-
-## Visualise with viewephys
-
-`viewephys` has a native lfpack backend — point it at the `.h5` file directly,
-no manual transpose or `BrainRegions` wiring needed:
-
-```bash
-viewephys -f lf_compressed_all_bwm.h5
-```
-
-The `.h5` extension is auto-detected and opens the lfpack-aware viewer, which:
-
-- shows a searchable recording selector (type any `pid` substring) when the
-  file holds multiple recordings, preserving window size, position and zoom
-  when you switch
-- colours the depth axis by brain region automatically, reading the
-  `atlas_id` / `acronym` annotations embedded in the file — no separate
-  `iblatlas` call required
-- adds a **CSD** (current-source density) step alongside the raw signal
-
-![Recording selector (top right) and raw/CSD checkboxes after opening a multi-recording lfpack file — the dataset info panel confirms the native "Neuropixels LFP (lfpack)" backend](../figures/viewephys_recording_selector.jpg){fig-alt="Ephys Bin Viewer window showing the searchable recording dropdown and raw/CSD checkboxes for an lfpack HDF5 file" .lightbox}
-
-The same class is usable from Python:
-
-```python
-from viewephys.gui import LFPackBinViewer
-from viewephys.viewer.qt import create_app
-
-app = create_app()
-win = LFPackBinViewer("lf_compressed_all_bwm.h5")
-app.exec()
-```
-
-![viewephys opened directly on a BWM lfpack file — brain regions colour the depth axis automatically and the searchable selector switches between the file's 699 recordings](../figures/viewephys_screenshot.jpg){fig-alt="viewephys density view showing 384-channel LFP data with brain region colour bar and a searchable recording selector" .lightbox}
-
-See [viewephys PR #49](https://github.com/int-brain-lab/viewephys/pull/49) for implementation details.
-
-## Prerequisites
-
-```bash
-uv pip install "viewephys[lfpack]" one-api
-```
+hosts a live web viewer over the dataset: pick a recording (searchable by `pid`) or filter by
+brain region (acronym or name, e.g. `VISp` or `Isocortex`, matching the region and its Allen
+descendants), then pan, zoom and adjust gain. No download needed.
 
 ## Download
 
-From inside the `ibl-ai-agent` repository:
-
-```bash
-uv run python scripts/download_datasets.py --lfp
-```
-
-This downloads `lf_compressed_all_bwm.h5` (~14 GB) into `reports/datasets/bwm_lfp/`
-and writes the path into `data_locations.local.yaml` automatically.
-
-Or, from Python (no AWS credentials needed — uses the ONE public S3 helper):
+No AWS credentials are needed; the files are in the public IBL bucket:
 
 ```python
 from one.remote.aws import s3_download_file
 
 s3_download_file(
-    source="resources/ibl-agent-data/lf_compressed_all_bwm.h5",
-    destination="lf_compressed_all_bwm.h5",
+    source="resources/ibl-agent-data/lf_compressed_v04_a07_default_all_bwm.h5",
+    destination="lf_compressed_v04_a07_default_all_bwm.h5",
 )
 ```
 
-`s3_download_file` defaults to the IBL public bucket, shows a tqdm progress bar,
-and skips the download if the local file already has the correct size.
+`s3_download_file` shows a progress bar and skips the download if the local file already has
+the right size.
 
-### Mild tier (higher fidelity)
+## Limitations
 
-A higher-fidelity `mild` tier (ε=100, α=14 — see [Benchmark gallery](../explanation/gallery.qmd))
-is also published for the BWM cohort, at roughly 240× rather than 430× compression. Same
-format, same 699 recordings — just a different accuracy/size trade-off. Not yet wired into
-`ibl-ai-agent`'s `download_datasets.py --lfp` flag; fetch it directly:
+- **Saturation.** ADC-clipped stretches are flagged and muted in the output. 446 of the 699
+  recordings have at least one; check [your window](#quality-control-saturation) before
+  trusting amplitude.
+- **High frequencies.** Power above roughly 20–30 Hz is traded for compression, more so at
+  `small` than at `fine`.
+- **CSD.** The archives were denoised with the v04 Cadzow, whose CSD has seams every 16
+  channels, and the codec smooths fine spatial structure: check CSD features that persist
+  over a chunk against uncompressed data. Cadzow in lfpack ≥ 1.1 has no seams; no BWM archive
+  uses it yet.
+- **Low frequencies.** Per-channel impedance and analog-filter differences leave
+  channel-to-channel amplitude outliers below 1.5 Hz that the pre-processing does not fully
+  correct.
 
-```python
-from one.remote.aws import s3_download_file
+![Saturation across the 699 recordings: saturated fraction per recording (left) and the 15 most affected (right).](../figures/bwm_saturation_detection.png){.lightbox}
 
-s3_download_file(
-    source="resources/ibl-agent-data/lf_compressed_mild_all_bwm.h5",
-    destination="lf_compressed_mild_all_bwm.h5",
-)
-```
+## Before you start
 
-## Session-clock times
-
-`sr.times` returns a `(ns,)` array of session-clock timestamps (seconds) for every
-LFP sample, derived from the sync signal stored during compression.
-Use it to align LFP traces with trial events or spike times:
+- **Align with trial events via `sr.times`.** Each recording stores a sync-corrected session
+  clock; do not use `np.arange / sr.fs`. See [Read lfpack files](read-files.qmd#session-clock-times).
+- **Bin channels for brain-wide sweeps.** `bin_channels=4` reduces each recording to 96
+  spatial bins. See [binned reads](read-files.qmd#bin-channels-while-reading).
 
 ```python
 from lfpack import LFPackReader
-import numpy as np
 
-file_lfpack = "lf_compressed_all_bwm.h5"
-pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
+file_lfpack = "lf_compressed_v04_a07_default_all_bwm.h5"
+pid = "dab512bd-a02d-4c1f-8dbc-9155a163efc0"
 
 sr = LFPackReader(file_lfpack, recording=pid)
+traces = sr[: int(10 * sr.fs)]     # (2500, 384) float32, volts
+t = sr.times[: len(traces)]        # session-clock seconds
+```
+
+`LFPackReader.recordings(file_lfpack)` lists the 699 `pid`s.
+
+## Quality control: saturation {#quality-control-saturation}
+
+Each recording carries a table of saturated spans, detected on the raw band before any
+filtering and zeroed in the decompressed output:
+
+```python
+sr.saturation             # DataFrame: start_sample, stop_sample (raw-rate samples)
+sr.saturation_summary     # saturated_fraction, n_intervals, total_saturated_sec, muted, ...
+sr.saturation_times()     # the table plus start_time, stop_time (session clock)
 
 n = int(10 * sr.fs)
-traces = sr[:n, :]      # (n_samples, nc) — first 10 s
-t = sr.times[:n]        # (n_samples,)    — session-clock seconds
-
-# Align with trial events loaded via ONE
-# stim_on = trials['stimOn_times']   # already in session-clock seconds
-# idx = np.searchsorted(t, stim_on)  # nearest LFP sample for each stimulus onset
+mask = sr.saturation_mask[:n]       # (n,) bool at the reader's rate, True where saturated
+traces_clean = sr[:n][~mask]
 ```
 
-## List recordings
-
-Each file contains one entry per BWM probe. Recording identifiers are named after the probe identifier UUID `pid`.
-
-```python
-from lfpack import LFPackReader
-
-recordings = LFPackReader.recordings("lf_compressed_all_bwm.h5")
-print(f"{len(recordings)} recordings")
-print(recordings[:3])
-# 699 recordings
-# ['00a824c0-e060-495f-9ebc-79c82fef4c67', '00a96dee-1e8b-44cc-9cc3-aca704d2b594', '00c425fd-ec3e-4cd2-b8af-c0bc0c4bdd44']
-```
-
-## Read a single recording
-
-```python
-from lfpack import LFPackReader
-
-file_lfpack = "lf_compressed_all_bwm.h5"
-pid = 'dab512bd-a02d-4c1f-8dbc-9155a163efc0'
-
-sr = LFPackReader(file_lfpack, recording=pid)
-
-# First 10 seconds — shape (2500, nc), float32, volts
-traces = sr[: int(10 * sr.fs)].T
-
-print(f"Duration:    {sr.ns / sr.fs:.1f} s")
-print(f"Channels:    {sr.nc}")
-print(f"Sample rate: {sr.fs} Hz")   # 250 Hz (decimated from 2500 Hz)
-print(f"Shape:       {traces.shape}")
-
-# Duration:    3668.9 s
-# Channels:    384
-# Sample rate: 250.00252518761928 Hz
-# Shape:       (384, 2500)
-```
-
-`LFPackReader` is a drop-in for `spikeglx.Reader`.
-Slicing decompresses only the requested chunks — the full file is never loaded into memory.
-
-## Quality Control - Saturation
-
-Each recording carries an insertion-level table of ADC-saturated (clipped) spans,
-detected on the raw LFP band before any filtering. The saturated stretches are muted
-(zeroed) in the decompressed output, so it's worth checking whether a window of
-interest overlaps one before trusting the amplitude.
-
-```python
-from lfpack import LFPackReader
-
-sr = LFPackReader("lf_compressed_all_bwm.h5", recording=pid)
-
-# Interval table: raw-rate sample indices, recording-aligned
-sr.saturation
-#    start_sample  stop_sample
-# 0        123456       125000
-
-# Recording-level summary (fraction/count/whether muting was applied)
-sr.saturation_summary
-# {'saturated_fraction': 0.0052, 'n_intervals': 3, 'total_saturated_sec': 12.9, 'muted': True, ...}
-```
-
-`saturation_mask` gives a boolean array at the reader's own — decimated — sampling rate,
-indexed exactly like the reader itself rather than called with a window:
-
-```python
-n = int(10 * sr.fs)
-traces = sr[:n, :]                  # (n, nc)
-mask = sr.saturation_mask[:n]       # (n,) bool, True where saturated
-
-traces_clean = traces[~mask]
-```
-
-For session-clock timestamps of saturated intervals (e.g. to overlay against trial events),
-use `saturation_times` rather than converting `sr.saturation`'s samples to seconds by hand —
-it applies the same sync correction as [`sr.times`](#session-clock-times):
-
-```python
-sr.saturation_times()
-#    start_sample  stop_sample  start_time  stop_time
-# 0        123456       125000    1234.382    1235.000
-```
-
-All four (`saturation`, `saturation_summary`, `saturation_mask`, `saturation_times`) degrade
-gracefully to empty/default values on recordings without saturation detection, so the same
-code works across the whole dataset without a try/except.
-
-
-![Saturation detection across the 699-recording release: per-recording saturated-fraction distribution (left) and the 15 most-affected recordings (right).](../figures/bwm_saturation_detection.png){.lightbox}
-
+All four return empty or default values for recordings without saturation detection, so the
+same code runs on the whole dataset.
 
 ## Channel brain locations
 
-Each recording stores per-channel brain location annotations embedded in the file —
-no network call needed.  Access them via `sr.channels`:
+Brain locations are embedded in each file; no network call is needed:
 
 ```python
-from lfpack import LFPackReader
-
-sr = LFPackReader("lf_compressed_all_bwm.h5", recording=pid)
 ch = sr.channels
-
-print(ch["acronym"][:5])   # ['VISp', 'VISp', 'CA1', 'CA1', 'DG']
-print(ch["atlas_id"][:5])  # Allen CCF structure IDs, int32
-print(ch["x"][:5])         # mediolateral MNI coordinates, metres
-print(ch["y"][:5])         # anteroposterior
-print(ch["z"][:5])         # dorsoventral
+ch["acronym"][:5]    # Allen acronym per channel
+ch["atlas_id"][:5]   # Allen CCF structure IDs, int32
+ch["labels"][:5]     # 0 good, 1 dead, 2 noisy, 3 outside the brain
+ch["x"][:5], ch["y"][:5], ch["z"][:5]   # ML, AP, DV in metres
 ```
 
-When using `bin_channels`, `channels` automatically aggregates: coordinates are
-averaged and brain region is the within-group mode:
+With `bin_channels`, coordinates are averaged and regions take the within-group mode;
+`sr.channels_full` always returns the raw electrodes.
 
-```python
-sr = LFPackReader("lf_compressed_all_bwm.h5", recording=pid, bin_channels=4)
-ch = sr.channels           # shapes (96,) — one entry per spatial bin
-ch_full = sr.channels_full # shapes (384,) — always raw per-electrode
+## Visualise with viewephys
+
+```bash
+uv pip install "viewephys[lfpack]"
+viewephys -f lf_compressed_v04_a07_default_all_bwm.h5
 ```
 
-## Binned-channel reads
+The viewer has a searchable recording selector, colours the depth axis by brain region from
+the embedded annotations, and adds a CSD view.
 
-`LFPackReader(file_lfpack, recording=pid, bin_channels=4)` sums groups of 4 neighbouring
-channels while decoding: 96 spatial bins instead of 384, with the depth resolution LFP needs.
-See [how to read lfpack files](read-files.qmd#bin-channels-while-reading).
-
-![Full-resolution (384 ch) vs binned ×4 (96 ch) LFP density for the same 4-second window](../figures/lfp_binned_comparison.jpg){fig-alt="Side-by-side LFP density plots at full and 4x binned channel resolution" .lightbox}
+![viewephys on a BWM file: brain regions colour the depth axis and the selector switches between the 699 recordings.](../figures/viewephys_screenshot.jpg){fig-alt="viewephys density view showing 384-channel LFP data with a brain region colour bar and a searchable recording selector" .lightbox}

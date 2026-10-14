@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- BWM dataset page rewritten for the v04 tiers (small / default / fine); outdated v03, sync and figure references removed. Cadzow is documented as opt-in, and stale docstrings (reader layout, bad-channel handling) are fixed.
+
 ## [1.1.0] - 2026-10-10
 
 ### Changed

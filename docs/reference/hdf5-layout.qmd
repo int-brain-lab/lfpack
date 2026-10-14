@@ -73,7 +73,8 @@ attributes keeps working. Write both with `lfpack.write_sync_attrs`.
 ## `saturation`
 
 Written once per recording. Attributes: `fs`, `ns_total`, `n_saturated_samples`,
-`saturated_fraction`, the detection parameters and `muted` (whether the spans were zeroed).
+`saturated_fraction`, the detection parameters (`v_per_sec`, `proportion`,
+`mute_window_samples`) and `muted` (whether the spans were zeroed).
 
 ## HDF5 version
 

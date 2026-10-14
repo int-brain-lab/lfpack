@@ -33,6 +33,8 @@ sr.read_samples(0, 1000, bin_channels=8)  # per-call override
 
 `bin_channels` must divide `nc`; `sr.channels` (brain locations) aggregates the same way.
 
+![Full resolution (384 channels) against binned ×4 (96 channels), same 4 s window.](../figures/lfp_binned_comparison.jpg){fig-alt="Side-by-side LFP density plots at full and 4x binned channel resolution" .lightbox}
+
 ## Session-clock times
 
 Use `sr.times` rather than `np.arange(ns) / sr.fs` to align samples with trial events or

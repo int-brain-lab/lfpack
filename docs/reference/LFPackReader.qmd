@@ -10,8 +10,8 @@ Chunks are decompressed on demand.  No sync trace is available; read() with
 sync=True returns None as the second element.  Data is returned in volts (float32)
 in the same (n_samples, n_channels) convention as spikeglx.Reader.
 
-The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
-A file may contain multiple recordings and/or multiple scale levels.  When a file
+The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/codec/
+(see the HDF5 format reference).  A file may contain multiple recordings and/or multiple scale levels.  When a file
 contains exactly one recording the key is auto-detected; otherwise pass recording=.
 
 ## Parameters {.doc-section .doc-section-parameters}

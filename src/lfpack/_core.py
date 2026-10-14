@@ -559,7 +559,7 @@ def compress_to_h5(
     basis_size=_container.BASIS_SIZE,
 ):
     """
-    Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
+    Compress a decimated (ns, nc) .npy into a format-2 HDF5 archive, chunk by chunk.
 
     Each written chunk of `chunk` samples is extended by `overlap` samples on each side
     before SVD + wavelet-packet compression.  Only the central `chunk` columns of Vh_hat
@@ -594,7 +594,8 @@ def compress_to_h5(
     Parameters
     ----------
     cadzow_npy : path-like
-        Path to the (ns, nc) float32 Cadzow checkpoint (time-first).
+        Path to the (ns, nc) float32 array at the rate to store (time-first), typically the
+        decimated, optionally Cadzow-denoised checkpoint of ``compress_bin_to_h5``.
     out_h5 : path-like
         Output HDF5 file (created or overwritten).
     recording : str
@@ -893,8 +894,8 @@ def compress_bin_to_h5(
 
     Bad channels are detected automatically (via ibldsp.voltage.detect_bad_channels_cbin)
     before decimation unless *channel_labels* is supplied or the checkpoint already exists.
-    Detected bad channels are interpolated by resample_denoise_lfp_cbin before SVD, which
-    prevents incoherent channels from collapsing the noise-floor estimate and inflating rank.
+    Dead and noisy channels are interpolated before the common-average reference, which
+    prevents incoherent channels from inflating the SVD noise floor and rank.
 
     Parameters
     ----------
@@ -950,8 +951,8 @@ def compress_bin_to_h5(
     detect_saturation : bool
         If True (default), detect ADC-saturated samples on the raw LFP band before any
         pre-processing (which would otherwise obscure the clipping), store the saturated
-        intervals as an insertion-level table in the HDF5 file, and — when Stage 1 is
-        actually run — mute the saturated stretches on the decimated output *after* Cadzow,
+        intervals as an insertion-level table in the HDF5 file, and — unless the decimation
+        is skipped because the checkpoint exists — mute the saturated stretches on the decimated output *after* Cadzow,
         so no pre-processing stage can leak energy back into the muted span.  See
         ``ibldsp.voltage.saturation``.
     saturation_kwargs : dict or None
@@ -1131,8 +1132,8 @@ class LFPackReader(_spikeglx.Reader):
     sync=True returns None as the second element.  Data is returned in volts (float32)
     in the same (n_samples, n_channels) convention as spikeglx.Reader.
 
-    The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
-    A file may contain multiple recordings and/or multiple scale levels.  When a file
+    The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/codec/
+    (see the HDF5 format reference).  A file may contain multiple recordings and/or multiple scale levels.  When a file
     contains exactly one recording the key is auto-detected; otherwise pass recording=.
 
     Parameters

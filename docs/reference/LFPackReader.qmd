@@ -10,8 +10,8 @@ Chunks are decompressed on demand.  No sync trace is available; read() with
 sync=True returns None as the second element.  Data is returned in volts (float32)
 in the same (n_samples, n_channels) convention as spikeglx.Reader.
 
-The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
-A file may contain multiple recordings and/or multiple scale levels.  When a file
+The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/codec/
+(see the HDF5 format reference).  A file may contain multiple recordings and/or multiple scale levels.  When a file
 contains exactly one recording the key is auto-detected; otherwise pass recording=.
 
 ## Parameters {.doc-section .doc-section-parameters}
@@ -47,6 +47,7 @@ contains exactly one recording the key is auto-detected; otherwise pass recordin
 | [geometry_full](#lfpack.LFPackReader.geometry_full) | Full per-electrode probe geometry, independent of ``bin_channels``. |
 | [nc](#lfpack.LFPackReader.nc) | Number of output channels (raw nc // bin_channels). |
 | [saturation](#lfpack.LFPackReader.saturation) | Insertion-level table of ADC-saturated intervals. |
+| [provenance](#lfpack.LFPackReader.provenance) | Software and settings that wrote the file, read from the ``meta`` attrs. |
 | [saturation_mask](#lfpack.LFPackReader.saturation_mask) | Boolean saturation mask for the full recording, at this reader's sampling rate. |
 | [saturation_summary](#lfpack.LFPackReader.saturation_summary) | Summary of saturation over the whole recording, read from dataset attrs. |
 | [t0](#lfpack.LFPackReader.t0) | Session-clock time in seconds at LFP sample 0. NaN when no sync data. |

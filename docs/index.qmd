@@ -5,9 +5,9 @@ subtitle: "Lossy LFP codec for Neuropixels recordings"
 
 **lfpack** compresses Neuropixels LFP into random-access HDF5 files of about **1.5 %** of the
 decimated (250 Hz, float32) data, and reads them back through a drop-in replacement for
-`spikeglx.Reader`. The raw band is cleaned, decimated to 250 Hz and denoised, then every 8 s
-chunk is coded as an SVD whose spatial modes live in one shared basis per recording and whose
-temporal modes are thresholded wavelet packets.
+`spikeglx.Reader`. The raw band is cleaned and decimated to 250 Hz and Cadzow-denoised (on by default),
+then every 8 s chunk is coded as an SVD whose spatial modes live in one shared basis per
+recording and whose temporal modes are thresholded wavelet packets.
 
 ```bash
 pip install lfpack
@@ -33,7 +33,8 @@ traces = sr[0:1000]      # (1000, n_channels) float32, volts
 | **7 (default)** | **1.55 %** | **18.5 dB** | **0.0030** |
 | 2.5 | 3.09 % | 23.4 dB | 0.0005 |
 
-See [the codec](explanation/pipeline.qmd#codec) for how these were measured.
+See [the codec](explanation/pipeline.qmd#codec) for how these were measured. The BWM release
+ships these three α as `small`, `default` and `fine` ([dataset](how-to/bwm-dataset.qmd)).
 
 ## Documentation
 

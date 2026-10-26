@@ -981,25 +981,58 @@ class TestCadzowLfpKwargs(unittest.TestCase):
             mock.patch("lfpack._core._spikeglx.Reader", return_value=sr),
             mock.patch("lfpack._core._spikeglx.geometry_from_meta", return_value=h1),
             mock.patch("ibldsp.voltage.resample_denoise_lfp_cbin") as resample,
-            mock.patch("lfpack._core.compress_to_h5"),
+            mock.patch("lfpack._core.compress_to_h5") as compress_h5,
         ):
-            for cadzow_kwargs, expected in (
-                ({}, {**cadzow.LFP_KWARGS_NP1, "bad_channels_as_missing": True}),
+            for cadzow, cadzow_kwargs, expected in (
+                (True, None, {**cadzow.LFP_KWARGS_NP1, "bad_channels_as_missing": True}),  # the default
                 (
+                    True,
                     {"rank": 3, "bad_channels_as_missing": False},
                     {**cadzow.LFP_KWARGS_NP1, "rank": 3, "bad_channels_as_missing": False},
                 ),
-                (None, None),
+                (False, None, None),
             ):
                 lfpack.compress_bin_to_h5(
                     Path(tmp).joinpath("x.cbin"),
                     Path(tmp).joinpath("x.h5"),
                     cadzow_checkpoint_file=Path(tmp).joinpath("ckpt.npy"),
+                    cadzow=cadzow,
                     cadzow_kwargs=cadzow_kwargs,
                     channel_labels=np.zeros(384, dtype=int),
                     detect_saturation=False,
                 )
                 self.assertEqual(resample.call_args.kwargs["cadzow_kwargs"], expected)
+                self.assertEqual(compress_h5.call_args.kwargs["processing"]["cadzow"], expected)
+
+
+class TestProvenance(unittest.TestCase):
+    """Software versions and processing settings stored in meta.attrs and read back by the reader."""
+
+    def test_written_and_read_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npy, out = Path(tmp).joinpath("x.npy"), Path(tmp).joinpath("x.h5")
+            np.save(npy, _synthetic_lfp(32, 500).T)
+            lfpack.compress_to_h5(npy, out, recording="rec", processing={"cadzow": {"rank": 5}})
+            info = lfpack.LFPackReader(out).provenance
+            with h5py.File(out, "r") as f:
+                self.assertEqual(f["rec/00/meta"].attrs["lfpack_version"], lfpack.__version__)
+        self.assertEqual(info["lfpack_version"], lfpack.__version__)
+        self.assertEqual(info["processing"], {"cadzow": {"rank": 5}})
+        self.assertEqual(info["format_version"], 2)
+        self.assertNotEqual(info["ibl_neuropixel_version"], "unknown")
+
+    def test_files_without_provenance(self):
+        """Files written before the attrs existed give None, not an error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            npy, out = Path(tmp).joinpath("x.npy"), Path(tmp).joinpath("x.h5")
+            np.save(npy, _synthetic_lfp(32, 500).T)
+            lfpack.compress_to_h5(npy, out, recording="rec")
+            with h5py.File(out, "r+") as f:
+                for key in lfpack._provenance.PROVENANCE_ATTRS:
+                    del f["rec/00/meta"].attrs[key]
+            info = lfpack.LFPackReader(out).provenance
+        self.assertIsNone(info["lfpack_version"])
+        self.assertEqual(info["processing"], {})
 
 
 class TestSaturationTable(unittest.TestCase):

@@ -43,7 +43,7 @@ from ibldsp import cadzow as _cadzow
 from scipy.interpolate import interp1d
 from tqdm import tqdm
 
-from lfpack import _container
+from lfpack import _container, _provenance
 
 _WP_WAVELET = "db4"
 _WP_MAXLEVEL = 5
@@ -557,9 +557,10 @@ def compress_to_h5(
     saturation_intervals=None,
     saturation_attrs=None,
     basis_size=_container.BASIS_SIZE,
+    processing=None,
 ):
     """
-    Compress a Cadzow-denoised .npy into a single HDF5 archive of LFPCompressed chunks.
+    Compress a decimated (ns, nc) .npy into a format-2 HDF5 archive, chunk by chunk.
 
     Each written chunk of `chunk` samples is extended by `overlap` samples on each side
     before SVD + wavelet-packet compression.  Only the central `chunk` columns of Vh_hat
@@ -571,7 +572,9 @@ def compress_to_h5(
     /<recording>/<scale_str>/meta        attrs: nc, ns_total, fs, compress_chunk,
                                                 compress_overlap, epsilon, alpha,
                                                 format_version, sglx_meta (JSON),
-                                                geometry_x, geometry_y
+                                                geometry_x, geometry_y, lfpack_version,
+                                                lfpack_commit, ibl_neuropixel_version,
+                                                processing (JSON)
     /<recording>/<scale_str>/codec/      datasets: chunk_table, u_values, vh_deltas,
                                                    vh_values, and basis + u_norms with a
                                                    shared basis (see ``lfpack._container``)
@@ -594,7 +597,8 @@ def compress_to_h5(
     Parameters
     ----------
     cadzow_npy : path-like
-        Path to the (ns, nc) float32 Cadzow checkpoint (time-first).
+        Path to the (ns, nc) float32 array at the rate to store (time-first), typically the
+        decimated, optionally Cadzow-denoised checkpoint of ``compress_bin_to_h5``.
     out_h5 : path-like
         Output HDF5 file (created or overwritten).
     recording : str
@@ -635,6 +639,10 @@ def compress_to_h5(
     basis_size : int
         Number of vectors of the shared spatial basis (one per recording and scale; each
         chunk stores float16 coefficients in it).  Default 32.
+    processing : dict or None
+        Settings of the pre-processing that produced the input (e.g. the Cadzow keyword
+        arguments), stored as JSON in ``meta.attrs["processing"]`` next to the software
+        versions (see ``lfpack._provenance``).  Default None (empty).
     """
     import h5py
 
@@ -669,6 +677,8 @@ def compress_to_h5(
         mg.attrs["epsilon"] = epsilon
         mg.attrs["alpha"] = alpha
         mg.attrs["sglx_meta"] = _json.dumps(sglx_meta or {})
+        for key, val in _provenance.provenance(processing).items():
+            mg.attrs[key] = val
         mg.attrs["geometry_x"] = h["x"].astype(np.float32)
         mg.attrs["geometry_y"] = h["y"].astype(np.float32)
         mg.attrs["t0_sync"] = float(t0_sync) if t0_sync is not None else np.nan
@@ -865,6 +875,7 @@ def compress_bin_to_h5(
     q=10,
     h=None,
     cadzow_checkpoint_file=None,
+    cadzow=True,
     cadzow_kwargs=None,
     channel_labels=None,
     epsilon=100.0,
@@ -885,7 +896,7 @@ def compress_bin_to_h5(
     Full pipeline: raw LFP binary → decimate → Cadzow denoise → SVD+WP compress → HDF5.
 
     Decimation uses ibldsp.voltage.resample_denoise_lfp_cbin (FIR anti-aliasing).  Cadzow
-    denoising is performed inside each decimation worker when *cadzow_kwargs* is provided.
+    denoising is performed inside each decimation worker unless *cadzow* is False.
     An intermediate float32 checkpoint (.npy) is always written — either to the path given
     by *cadzow_checkpoint_file* or to a sibling temp file that is deleted after the HDF5 is
     finalised.  If the checkpoint file already exists its contents are used directly, skipping
@@ -893,8 +904,8 @@ def compress_bin_to_h5(
 
     Bad channels are detected automatically (via ibldsp.voltage.detect_bad_channels_cbin)
     before decimation unless *channel_labels* is supplied or the checkpoint already exists.
-    Detected bad channels are interpolated by resample_denoise_lfp_cbin before SVD, which
-    prevents incoherent channels from collapsing the noise-floor estimate and inflating rank.
+    Dead and noisy channels are interpolated before the common-average reference, which
+    prevents incoherent channels from inflating the SVD noise floor and rank.
 
     Parameters
     ----------
@@ -914,13 +925,14 @@ def compress_bin_to_h5(
         Path for the intermediate Cadzow .npy checkpoint (ns_lf, nc) float32.
         If None a temporary file is written next to out_h5 and deleted afterwards.
         If the file already exists the decimate+Cadzow step is skipped entirely.
+    cadzow : bool
+        Cadzow denoising with the latest ibl-neuropixel settings for the probe geometry (NP1 or NP2,
+        see `cadzow_lfp_kwargs`).  Default True; False is pure decimation.
     cadzow_kwargs : dict or None
-        Enables Cadzow denoising with the defaults for the probe geometry (NP1 or NP2, see
-        `cadzow_lfp_kwargs`); its keys override them (``ibldsp.cadzow.cadzow_denoiser``
-        parameters).  Pass ``{}`` for the defaults.  The dead and noisy channels are estimated by
-        Cadzow (``bad_channels_as_missing=True`` of ``resample_denoise_lfp_cbin``) instead of being
-        interpolated after it; pass ``bad_channels_as_missing=False`` to interpolate.  Default None
-        disables Cadzow (pure decimation).
+        Overrides of those settings (``ibldsp.cadzow.cadzow_denoiser`` parameters); None keeps them.
+        The dead and noisy channels are estimated by Cadzow (``bad_channels_as_missing=True`` of
+        ``resample_denoise_lfp_cbin``) instead of being interpolated after it; pass
+        ``bad_channels_as_missing=False`` to interpolate.  Ignored when *cadzow* is False.
     channel_labels : np.ndarray or None
         Per-channel quality labels (0=good, 1=dead, 2=noisy, 3=outside brain).
         If None and the checkpoint does not exist, labels are auto-detected via
@@ -950,8 +962,8 @@ def compress_bin_to_h5(
     detect_saturation : bool
         If True (default), detect ADC-saturated samples on the raw LFP band before any
         pre-processing (which would otherwise obscure the clipping), store the saturated
-        intervals as an insertion-level table in the HDF5 file, and — when Stage 1 is
-        actually run — mute the saturated stretches on the decimated output *after* Cadzow,
+        intervals as an insertion-level table in the HDF5 file, and — unless the decimation
+        is skipped because the checkpoint exists — mute the saturated stretches on the decimated output *after* Cadzow,
         so no pre-processing stage can leak energy back into the muted span.  See
         ``ibldsp.voltage.saturation``.
     saturation_kwargs : dict or None
@@ -1048,6 +1060,10 @@ def compress_bin_to_h5(
         n_int = 0 if saturation_intervals is None else saturation_intervals.shape[0]
         print(f"  {n_int} saturated interval(s), {saturation_attrs['saturated_fraction']:.4%} of samples")
 
+    cadzow_params = None
+    if cadzow:
+        cadzow_params = {"bad_channels_as_missing": True, **cadzow_lfp_kwargs(h, **(cadzow_kwargs or {}))}
+
     # Stage 1: decimate (+ optional Cadzow) → float32 checkpoint
     if checkpoint_existed:
         print(f"Using existing Cadzow checkpoint {cadzow_npy}")
@@ -1079,9 +1095,7 @@ def compress_bin_to_h5(
             channel_labels=channel_labels,
             highpass_cutoff=highpass_cutoff,
             car=car,
-            cadzow_kwargs=None
-            if cadzow_kwargs is None
-            else {"bad_channels_as_missing": True, **cadzow_lfp_kwargs(h, **cadzow_kwargs)},
+            cadzow_kwargs=cadzow_params,
             n_jobs=n_jobs,
             saturation_file=saturation_file,
             mute_window_samples=sat_mute_window,
@@ -1106,6 +1120,14 @@ def compress_bin_to_h5(
         saturation_intervals=saturation_intervals,
         saturation_attrs=saturation_attrs,
         basis_size=basis_size,
+        processing={
+            # a reused checkpoint was made by an earlier call: its settings are not known here
+            "cadzow": None if checkpoint_existed else cadzow_params,
+            "q": q,
+            "highpass_cutoff": highpass_cutoff,
+            "car": car,
+            "checkpoint_reused": checkpoint_existed,
+        },
     )
 
     if delete_checkpoint:
@@ -1131,8 +1153,8 @@ class LFPackReader(_spikeglx.Reader):
     sync=True returns None as the second element.  Data is returned in volts (float32)
     in the same (n_samples, n_channels) convention as spikeglx.Reader.
 
-    The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/chunks/.
-    A file may contain multiple recordings and/or multiple scale levels.  When a file
+    The HDF5 layout is /<recording>/<scale_str>/meta  and  /<recording>/<scale_str>/codec/
+    (see the HDF5 format reference).  A file may contain multiple recordings and/or multiple scale levels.  When a file
     contains exactly one recording the key is auto-detected; otherwise pass recording=.
 
     Parameters
@@ -1391,6 +1413,27 @@ class LFPackReader(_spikeglx.Reader):
                 return empty
             intervals = f[key][()].reshape(-1, 2).astype(np.int64)
         return pd.DataFrame(intervals, columns=["start_sample", "stop_sample"])
+
+    @property
+    def provenance(self):
+        """Software and settings that wrote the file, read from the ``meta`` attrs.
+
+        Returns
+        -------
+        dict with keys ``lfpack_version``, ``lfpack_commit`` (empty unless written from a git
+        checkout, ``-dirty`` suffix if it had uncommitted changes), ``ibl_neuropixel_version``,
+        ``processing`` (dict: Cadzow settings, decimation, highpass) and ``format_version``.
+        Values are ``None`` (``{}`` for ``processing``) for files written before lfpack 1.2.
+        """
+        import h5py
+
+        meta_path = f"{self._root}/meta" if self._root else "meta"
+        with h5py.File(self._h5_file, "r") as f:
+            attrs = f[meta_path].attrs
+            out = {k: attrs.get(k) for k in _provenance.PROVENANCE_ATTRS}
+        out["processing"] = _json.loads(out["processing"]) if out["processing"] else {}
+        out["format_version"] = self._format_version
+        return out
 
     @property
     def saturation_summary(self):

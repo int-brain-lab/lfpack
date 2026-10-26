@@ -32,7 +32,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv venv --python 3.14
-          uv pip install -e . --group dev
+          # six floor: python-dateutil 3.0.0 resolves with six 1.7.3, which breaks `import pandas`
+          uv pip install -e . --group dev "six>=1.16"
 
       - name: Build API reference
         run: .venv/bin/quartodoc build --config docs/_quarto.yml

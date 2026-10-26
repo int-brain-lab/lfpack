@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-26
+
 ### Changed
 - `compress_bin_to_h5` runs Cadzow by default, with the latest ibl-neuropixel settings for the probe geometry (`cadzow=True`). `cadzow=False` gives pure decimation; `cadzow_kwargs` only overrides the settings (`None` keeps them, it no longer disables Cadzow).
 

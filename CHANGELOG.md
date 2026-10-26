@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `compress_bin_to_h5` runs Cadzow by default, with the latest ibl-neuropixel settings for the probe geometry (`cadzow=True`). `cadzow=False` gives pure decimation; `cadzow_kwargs` only overrides the settings (`None` keeps them, it no longer disables Cadzow).
+
+### Added
+- Provenance in every `meta` group: `lfpack_version`, `lfpack_commit` (git checkout only, `-dirty` if modified), `ibl_neuropixel_version` and `processing` (JSON: Cadzow settings, decimation, highpass). Read with `LFPackReader.provenance`; `lfpack.__version__` is the installed version.
+
 ### Documentation
-- BWM dataset page rewritten for the v04 tiers (small / default / fine); outdated v03, sync and figure references removed. Cadzow is documented as opt-in, and stale docstrings (reader layout, bad-channel handling) are fixed.
+- BWM dataset page rewritten for the v04 tiers (small / default / fine); outdated v03, sync and figure references removed. The page states that no BWM archive has the lfpack ≥ 1.1 Cadzow yet, and stale docstrings (reader layout, bad-channel handling) are fixed.
 
 ## [1.1.0] - 2026-10-10
 

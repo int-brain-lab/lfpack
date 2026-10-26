@@ -20,6 +20,7 @@ compress_to_h5(
     saturation_intervals=None,
     saturation_attrs=None,
     basis_size=_container.BASIS_SIZE,
+    processing=None,
 )
 ```
 
@@ -74,3 +75,4 @@ installation without version negotiation.
 | saturation_intervals | np.ndarray or None | ``(n_intervals, 2)`` int64 array of ``[start_sample, stop_sample]`` saturated spans at the raw LFP rate.  Written once at ``/<recording>/saturation`` (scale ``00`` only).  Default None (no saturation table).                                                                                                                                                                                                                  | `None`                  |
 | saturation_attrs     | dict or None       | Attributes attached to the saturation dataset (fs, ns_total, saturated_fraction, detection parameters, whether muting was applied).  Default None.                                                                                                                                                                                                                                                                               | `None`                  |
 | basis_size           | int                | Number of vectors of the shared spatial basis (one per recording and scale; each chunk stores float16 coefficients in it).  Default 32.                                                                                                                                                                                                                                                                                          | `_container.BASIS_SIZE` |
+| processing           | dict or None       | Settings of the pre-processing that produced the input (e.g. the Cadzow keyword arguments), stored as JSON in ``meta.attrs["processing"]`` next to the software versions (see ``lfpack._provenance``).  Default None (empty). | `None` |

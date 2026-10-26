@@ -4,8 +4,8 @@
   <img src="docs/figures/logo.png" alt="lfpack logo" width="300"/>
 </p>
 
-Lossy, random-access codec for Neuropixels LFP. A recording is cleaned and decimated to 250 Hz
-(optionally Cadzow-denoised), then stored in an HDF5 file of about **1.5 %** of the decimated
+Lossy, random-access codec for Neuropixels LFP. A recording is cleaned, decimated to 250 Hz
+and Cadzow-denoised (the latest ibl-neuropixel settings, on by default), then stored in an HDF5 file of about **1.5 %** of the decimated
 float32 data (~20 MB per hour of 384-channel NP1) and read back through a drop-in `spikeglx.Reader`.
 
 ```bash

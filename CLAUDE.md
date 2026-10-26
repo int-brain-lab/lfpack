@@ -39,7 +39,7 @@ Nearly all code lives in `src/lfpack/_core.py` (~1700 lines); the HDF5 codec con
 4. Bad-channel interpolation — distance-weighted neighbors
 5. CAR — median subtraction across (good) channels
 6. Decimation — 2500 → 250 Hz (Q=10)
-7. Cadzow denoising, opt-in (`cadzow_kwargs` not None) — spatial rank reduction (`ibldsp.cadzow`); settings routed by geometry with `cadzow_lfp_kwargs` (NP1 checkerboard → `LFP_KWARGS_NP1`, full grid such as NP2 → `LFP_KWARGS_NP2`), `cadzow_kwargs` keys override them; multi-shank probes are refused. Dead and noisy channels go to Cadzow as missing (`bad_channels_as_missing=True`) and are not interpolated again
+7. Cadzow denoising, on by default (`cadzow=True`; `cadzow=False` is pure decimation) — spatial rank reduction (`ibldsp.cadzow`); settings routed by geometry with `cadzow_lfp_kwargs` (NP1 checkerboard → `LFP_KWARGS_NP1`, full grid such as NP2 → `LFP_KWARGS_NP2`), `cadzow_kwargs` keys override them; multi-shank probes are refused. Dead and noisy channels go to Cadzow as missing (`bad_channels_as_missing=True`) and are not interpolated again
 8. **Adaptive SVD + wavelet-packet thresholding** — the actual codec
 
 Steps 2–7 produce a `.npy` checkpoint (decimated, optionally denoised); an existing checkpoint skips them on resume. All stages are parallelised over time chunks with `joblib` (`n_jobs`). Muting (step 0): a raw-rate boolean saturation mask is passed to `resample_denoise_lfp_cbin` as `saturation_file`; each worker downsamples its slice of the mask onto the decimated grid (block-max over each Q-sample block), cosine-tapers it (`mute_window_samples`, now in **decimated** output samples) and multiplies the **decimated output *after* Cadzow** by it. This *late* muting replaced the earlier pre-filter approach: muting the raw traces before the highpass/CAR/decimate/Cadzow did not keep the span clean — those stages leaked energy back into it (residual noise, spurious CSD sources/sinks); a single re-mute of the final output is cleaner and cheaper. Muting is skipped when resuming from an existing checkpoint (data already decimated); the interval table is still written.
@@ -65,7 +65,8 @@ Guard bands: 64-sample Cadzow halos, 128-sample SVD/WP overlap to prevent edge t
    │               # written once per recording (scale-independent). attrs: fs, ns_total,
    │               # n_saturated_samples, saturated_fraction, detection params, muted
    └─ <scale_2digit>/
-      ├─ meta         # attrs: nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry, …
+      ├─ meta         # attrs: nc, ns_total, fs, fs_sync, t0_sync, epsilon, alpha, geometry,
+      │               #   lfpack_version, lfpack_commit, ibl_neuropixel_version, processing (JSON), …
       │               # optional child datasets: sync_samples, sync_times (gzip+shuffle)
       └─ codec/       # format 2 (meta.attrs["format_version"] == 2), see _container.py:
                       # chunk_table (per-chunk rank, n_kept, ...), basis (nc, m) float32,
@@ -97,7 +98,7 @@ setting them by hand.
 
 ### `LFPackReader`
 
-Drop-in replacement for `spikeglx.Reader`. Wraps an HDF5 file and decompresses chunks on demand. Supports multi-recording files via `recording=` kwarg and pyramidal scales via `scale=` kwarg. Saturation access: `.saturation` (interval DataFrame of raw-rate samples), `.saturation_summary` (fraction/count/muted from attrs), `.saturation_mask` (boolean array at the reader's decimated rate, index it like the reader; interval edges rounded outward), `saturation_times()` (the table plus session-clock seconds). All degrade gracefully to empty/default on files written without saturation detection.
+Drop-in replacement for `spikeglx.Reader`. Wraps an HDF5 file and decompresses chunks on demand. Supports multi-recording files via `recording=` kwarg and pyramidal scales via `scale=` kwarg. Provenance: `.provenance` (versions, git commit if run from a checkout, Cadzow/decimation settings; `lfpack.__version__` is the installed version). Saturation access: `.saturation` (interval DataFrame of raw-rate samples), `.saturation_summary` (fraction/count/muted from attrs), `.saturation_mask` (boolean array at the reader's decimated rate, index it like the reader; interval edges rounded outward), `saturation_times()` (the table plus session-clock seconds). All degrade gracefully to empty/default on files written without saturation detection.
 
 ## Ecosystem interconnections
 

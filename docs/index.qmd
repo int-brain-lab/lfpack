@@ -5,7 +5,7 @@ subtitle: "Lossy LFP codec for Neuropixels recordings"
 
 **lfpack** compresses Neuropixels LFP into random-access HDF5 files of about **1.5 %** of the
 decimated (250 Hz, float32) data, and reads them back through a drop-in replacement for
-`spikeglx.Reader`. The raw band is cleaned and decimated to 250 Hz (optionally Cadzow-denoised),
+`spikeglx.Reader`. The raw band is cleaned and decimated to 250 Hz and Cadzow-denoised (on by default),
 then every 8 s chunk is coded as an SVD whose spatial modes live in one shared basis per
 recording and whose temporal modes are thresholded wavelet packets.
 

@@ -18,4 +18,7 @@ from lfpack._core import (  # noqa: F401
     subset_h5,
 )
 from lfpack._legacy import upgrade_h5  # noqa: F401
+from lfpack._provenance import _version
 from lfpack._sync import SYNC_ATTRS, clear_sync_attrs, write_sync_attrs  # noqa: F401
+
+__version__ = _version("lfpack")

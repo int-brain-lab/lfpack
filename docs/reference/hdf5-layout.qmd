@@ -63,6 +63,8 @@ weighs the same.
 | `labels` | int8 (nc,) | Channel quality: 0 good, 1 dead, 2 noisy, 3 outside the brain |
 | `ml`, `ap`, `dv`, `atlas_id`, `acronym` | (nc,) | Optional brain locations |
 | `sglx_meta` | JSON string | Original SpikeGLX metadata |
+| `lfpack_version`, `lfpack_commit`, `ibl_neuropixel_version` | str | Software that wrote the file; the commit is empty unless lfpack ran from a git checkout |
+| `processing` | JSON string | Cadzow settings, decimation factor and highpass used (see [provenance](../explanation/pipeline.qmd#provenance)) |
 
 `sync_samples` / `sync_times` (float64 child datasets of `meta`, optional) are piecewise sync
 knots in this scale's sample units. They are datasets rather than attributes because an

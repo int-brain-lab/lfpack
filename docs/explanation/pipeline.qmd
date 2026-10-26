@@ -5,8 +5,9 @@ bibliography: ../references.bib
 
 `compress_bin_to_h5` turns a raw 2500 Hz SpikeGLX LFP binary into an lfpack file in two
 stages: preprocessing to a 250 Hz float32 array (checkpointed as `.npy`), then the codec.
-`compress_to_h5` runs the codec alone. Cadzow denoising is opt-in: it runs only when
-`cadzow_kwargs` is given.
+`compress_to_h5` runs the codec alone. Cadzow denoising is on by default with the latest
+ibl-neuropixel settings; `cadzow=False` gives pure decimation.
+The software versions and the settings used are stored in the file ([provenance](#provenance)).
 
 ## Preprocessing
 
@@ -28,9 +29,26 @@ truncated to a low rank, and averaged back to channels. The settings follow the 
 (`cadzow_lfp_kwargs`): `rank=5, niter=1, fmax=None, nswx=64, ovx=32, ppca_k=2.0` with
 Gavish-Donoho singular-value shrinkage, on the full lateral × depth grid for the NP1 checkerboard
 (`ibldsp.cadzow.LFP_KWARGS_NP1`) and on the channels for NP2 (`LFP_KWARGS_NP2`).
-`cadzow_kwargs={}` uses them; its keys override them. Dead and noisy channels are also passed to Cadzow, which
+They are the default; `cadzow_kwargs` keys override them. Dead and noisy channels are also passed to Cadzow, which
 estimates them from its fit (`bad_channels_as_missing=True`), so they are not interpolated again after it;
 pass `False` to interpolate them instead.
+
+## Provenance {#provenance}
+
+Every `meta` group records `lfpack_version`, `ibl_neuropixel_version`, `lfpack_commit` (set
+when lfpack runs from a git checkout, with a `-dirty` suffix for uncommitted changes, empty
+for a regular install) and `processing`, a JSON string with the Cadzow settings actually used,
+the decimation factor and the highpass. `LFPackReader(...).provenance` returns them as a dict:
+
+```python
+from lfpack import LFPackReader
+
+LFPackReader("my_recording.lf.h5").provenance
+```
+
+The installed package version is `lfpack.__version__`. Files written before lfpack 1.2 have
+none of these attributes (`format_version` and `epsilon` / `alpha` tell the codec format and tier).
+When the Cadzow checkpoint is reused, its settings are not known and `processing["cadzow"]` is `null`.
 
 ## Codec {#codec}
 

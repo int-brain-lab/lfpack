@@ -3,6 +3,8 @@ title: "lfpack"
 subtitle: "Lossy LFP codec for Neuropixels recordings"
 ---
 
+![3 s of hippocampal and thalamic LFP (dab512bd): uncompressed and the three BWM tiers (top), and the difference with the uncompressed signal on the same colour scale (bottom).](figures/compression_example_dab512bd.webp){.lightbox}
+
 **lfpack** compresses Neuropixels LFP into random-access HDF5 files of about **1.5 %** of the
 decimated (250 Hz, float32) data, and reads them back through a drop-in replacement for
 `spikeglx.Reader`. The raw band is cleaned and decimated to 250 Hz and Cadzow-denoised (on by default),

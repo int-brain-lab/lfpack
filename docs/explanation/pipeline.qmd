@@ -76,6 +76,12 @@ run on every reconstruction:
 
 ![File size vs change in wheel-speed R² (top) and SNR (bottom) against the former 0.4 "mild" tier (ε = 100, α = 14, per-chunk U), mean ± s.e.m. over 11 recordings. Left: rank threshold ε; right: basis size and coefficient precision. Dotted: uncompressed data.](../figures/codec_pareto.png){.lightbox}
 
+Source: [lfpack codec analysis](https://oliche.github.io/oliche-quarto/analyses/2026-06-lfp-compression-svd/index.html)
+(`pareto_sweep.py`, 2026-09-26). The sweep codes the June Cadzow output, i.e. the v04 signal. v05 changes only
+Cadzow, and its tiers cost the same decoding relative to their own uncompressed signal (wheel R² −0.007 / −0.003 /
+−0.000 at α = 14 / 7 / 2.5, against −0.005 / −0.003 / −0.001 for v04;
+[v05 analysis](https://oliche.github.io/oliche-quarto/analyses/2026-10-lfpack-v05/index.html)).
+
 - **α sets decoding quality**, and nothing else does: at equal α the shared basis and
   per-chunk U decode identically. The defaults are ε = 100 and α = 7; see the
   [table on the home page](../index.qmd#choosing-α) for α = 14 and 2.5.

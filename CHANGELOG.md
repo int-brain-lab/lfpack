@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- BWM dataset page moves to the v05 archives (lfpack 1.2.0, 699 recordings): tier table, a versions table (v03 / v04 / v05), v05 decoding and CSD results, and compression examples of four benchmark chunks. The landing page shows one of them; the codec figure of the pipeline page cites its analysis.
+
 ## [1.2.0] - 2026-10-26
 
 ### Changed

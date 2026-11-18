@@ -9,15 +9,24 @@ recordings.
 
 | Tier | α | File | Size | File / float32 at 250 Hz |
 |---|---:|---|---:|---:|
-| small | 14 | `lf_compressed_v04_a14_small_all_bwm.h5` | 7.7 GB | 0.57 % |
-| default | 7 | `lf_compressed_v04_a07_default_all_bwm.h5` | 14.9 GB | 1.10 % |
-| fine | 2.5 | `lf_compressed_v04_a2p5_fine_all_bwm.h5` | 31.9 GB | 2.36 % |
+| small | 14 | `lf_compressed_v05_a14_small_all_bwm.h5` | 10.1 GB | PCT_SMALL |
+| default | 7 | `lf_compressed_v05_a07_default_all_bwm.h5` | 20.0 GB | PCT_DEFAULT |
+| fine | 2.5 | `lf_compressed_v05_a2p5_fine_all_bwm.h5` | 43.4 GB | PCT_FINE |
 
-`small` decodes wheel speed, choice, feedback and brain region about as well as the retired
-v03 `mild` tier at 0.38× its size; `fine` recovers the scores of the uncompressed signal
-for behaviour. Start with `default`. The v03 files (`lf_compressed_all_bwm.h5`,
-`lf_compressed_mild_all_bwm.h5`, `lf_compressed_aggressive_all_bwm.h5`) are format 1 and
-superseded.
+Start with `default`. Each tier costs the same decoding as on v04 relative to its own
+uncompressed signal, and v05 decodes wheel speed better than v04 at every tier (R² 0.155 / 0.160 /
+0.162 against 0.143 / 0.145 / 0.147, small / default / fine, 11 insertions;
+[analysis](https://oliche.github.io/oliche-quarto/analyses/2026-06-lfp-compression-svd/index.html)).
+
+### Versions
+
+| Version | Files | lfpack | Published | Recordings | Notes |
+|---|---|---|---|---:|---|
+| v05 | `lf_compressed_v05_*_all_bwm.h5` | 1.2.0 | 2026-11-17 | 699 | Seam-free Cadzow; bad channels estimated by Cadzow |
+| v04 | `lf_compressed_v04_*_all_bwm.h5` | 1.0 | 2026-09-30 | 699 | Format 2; superseded |
+| v03 | `lf_compressed_{,mild_,aggressive_}all_bwm.h5` | < 1.0 | 2026-08-23 | 699 | Format 1; superseded |
+
+Every file records the code that wrote it: `LFPackReader(...).provenance`.
 
 ## Browse online
 
@@ -34,13 +43,30 @@ No AWS credentials are needed; the files are in the public IBL bucket:
 from one.remote.aws import s3_download_file
 
 s3_download_file(
-    source="resources/ibl-agent-data/lf_compressed_v04_a07_default_all_bwm.h5",
-    destination="lf_compressed_v04_a07_default_all_bwm.h5",
+    source="resources/ibl-agent-data/lf_compressed_v05_a07_default_all_bwm.h5",
+    destination="lf_compressed_v05_a07_default_all_bwm.h5",
 )
 ```
 
 `s3_download_file` shows a progress bar and skips the download if the local file already has
 the right size.
+
+## What compression looks like
+
+Four 32.8 s benchmark chunks, 3 s of LFP each, with the brain regions on the left. Top row:
+the uncompressed signal and each tier; bottom row: uncompressed minus lfpack, on the same
+colour scale. The ratio is that of the chunk compressed on its own, and the SNR is measured
+against the codec input (after pre-processing and Cadzow), so the difference is the codec
+alone. Large, coherent events survive at every tier; the difference is small and unstructured at
+this scale.
+
+![dab512bd: hippocampus and thalamus, 65× at the default tier.](../figures/compression_example_dab512bd.webp){.lightbox}
+
+![6638cfb3: the highest compression ratio of the 11 benchmark chunks.](../figures/compression_example_6638cfb3.webp){.lightbox}
+
+![e8f9fba4: the lowest compression ratio of the 11 benchmark chunks.](../figures/compression_example_e8f9fba4.webp){.lightbox}
+
+![da8dfec1: the lowest SNR of the 11 benchmark chunks at every tier.](../figures/compression_example_da8dfec1.webp){.lightbox}
 
 ## Limitations
 
@@ -49,10 +75,9 @@ the right size.
   trusting amplitude.
 - **High frequencies.** Power above roughly 20–30 Hz is traded for compression, more so at
   `small` than at `fine`.
-- **CSD.** The archives were denoised with the v04 Cadzow, whose CSD has seams every 16
-  channels, and the codec smooths fine spatial structure: check CSD features that persist
-  over a chunk against uncompressed data. Cadzow in lfpack ≥ 1.1 has no seams; no BWM archive
-  uses it yet.
+- **CSD.** The codec smooths fine spatial structure: expect about a third more CSD error than
+  on the uncompressed signal, and check CSD features that persist at one depth over a chunk
+  against uncompressed data.
 - **Low frequencies.** Per-channel impedance and analog-filter differences leave
   channel-to-channel amplitude outliers below 1.5 Hz that the pre-processing does not fully
   correct.
@@ -69,7 +94,7 @@ the right size.
 ```python
 from lfpack import LFPackReader
 
-file_lfpack = "lf_compressed_v04_a07_default_all_bwm.h5"
+file_lfpack = "lf_compressed_v05_a07_default_all_bwm.h5"
 pid = "dab512bd-a02d-4c1f-8dbc-9155a163efc0"
 
 sr = LFPackReader(file_lfpack, recording=pid)
@@ -116,7 +141,7 @@ With `bin_channels`, coordinates are averaged and regions take the within-group 
 
 ```bash
 uv pip install "viewephys[lfpack]"
-viewephys -f lf_compressed_v04_a07_default_all_bwm.h5
+viewephys -f lf_compressed_v05_a07_default_all_bwm.h5
 ```
 
 The viewer has a searchable recording selector, colours the depth axis by brain region from

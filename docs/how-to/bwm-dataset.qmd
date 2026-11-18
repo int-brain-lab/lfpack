@@ -7,11 +7,11 @@ published in three tiers that differ only in the wavelet threshold α
 ([choosing α](../index.qmd#choosing-α)). Every file has the same layout and the same 699
 recordings.
 
-| Tier | α | File | Size | File / float32 at 250 Hz |
-|---|---:|---|---:|---:|
-| small | 14 | `lf_compressed_v05_a14_small_all_bwm.h5` | 10.1 GB | 0.78 % |
-| default | 7 | `lf_compressed_v05_a07_default_all_bwm.h5` | 20.0 GB | 1.55 % |
-| fine | 2.5 | `lf_compressed_v05_a2p5_fine_all_bwm.h5` | 43.4 GB | 3.36 % |
+| Tier | α | File | Size | File / float32 at 250 Hz | File / raw int16 at 2500 Hz |
+|---|---:|---|---:|---:|---:|
+| small | 14 | `lf_compressed_v05_a14_small_all_bwm.h5` | 10.1 GB | 0.78 % | 0.16 % |
+| default | 7 | `lf_compressed_v05_a07_default_all_bwm.h5` | 20.0 GB | 1.55 % | 0.31 % |
+| fine | 2.5 | `lf_compressed_v05_a2p5_fine_all_bwm.h5` | 43.4 GB | 3.36 % | 0.67 % |
 
 Start with `default`. Each tier costs the same decoding as on v04 relative to its own
 uncompressed signal, and v05 decodes wheel speed better than v04 at every tier (R² 0.155 / 0.160 /
